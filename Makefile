@@ -7,8 +7,11 @@
 TARGET = pdu-firmware
 BUILD_DIR = build
 
-# Toolchain
-PREFIX = arm-none-eabi-
+# Toolchain — override PREFIX on the command line or via environment
+# e.g. make PREFIX=/path/to/arm-none-eabi-
+# Include optional local overrides (not checked in)
+-include local.mk
+PREFIX ?= arm-none-eabi-
 CC = $(PREFIX)gcc
 AS = $(PREFIX)gcc -x assembler-with-cpp
 CP = $(PREFIX)objcopy
@@ -37,6 +40,7 @@ C_INCLUDES = \
 -IApp/CAN \
 -IApp/PowerSequence \
 -IApp/Diagnostics \
+-IApp/PLL \
 -IDrivers/STM32G4xx_HAL_Driver/Inc \
 -IDrivers/STM32G4xx_HAL_Driver/Inc/Legacy \
 -IDrivers/CMSIS/Device/ST/STM32G4xx/Include \
@@ -52,7 +56,8 @@ $(wildcard App/ADC/*.c) \
 $(wildcard App/Protection/*.c) \
 $(wildcard App/CAN/*.c) \
 $(wildcard App/PowerSequence/*.c) \
-$(wildcard App/Diagnostics/*.c)
+$(wildcard App/Diagnostics/*.c) \
+$(wildcard App/PLL/*.c)
 
 # Vendor sources (relaxed warnings)
 VENDOR_SOURCES = \

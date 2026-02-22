@@ -5,7 +5,11 @@
 
 #include "app_statemachine.h"
 #include "app_can.h"
+#include "app_control.h"
 #include "app_diagnostics.h"
+#include "app_pll.h"
+#include "app_powerseq.h"
+#include "app_protection.h"
 #include "main.h"
 #include <stdio.h>
 #include <string.h>
@@ -43,6 +47,9 @@ static volatile uint8_t    s_enable_requested = 0;
 
 /** @brief  LED toggle period in DISABLED state (ms) */
 #define DISABLED_LED_BLINK_MS  500U
+
+/** @brief  LED toggle period in PLL_LOCK state (ms) — fast blink */
+#define PLL_LOCK_LED_BLINK_MS  100U
 
 /* ------------------------------------------------------------------ */
 /*  State transition helper                                            */
@@ -114,7 +121,108 @@ static void state_standby(void)
     if (s_enable_requested != 0U)
     {
         s_enable_requested = 0U;
+        App_Control_PFC_Start();
+        App_PLL_Reset();
         State_Transition(STATE_PLL_LOCK);
+    }
+}
+
+/**
+ * @brief  PLL_LOCK — wait for SRF-PLL to lock onto grid angle
+ *
+ * Fast-blinks LED (100 ms toggle) as visual indicator.
+ * Transitions to SOFT_START_PFC on lock, FAULT on 2 s timeout.
+ */
+static void state_pll_lock(void)
+{
+    /* Fast LED blink — 100 ms toggle */
+    uint32_t elapsed = HAL_GetTick() - s_state_entry_tick;
+
+    if ((elapsed / PLL_LOCK_LED_BLINK_MS) % 2U == 0U)
+    {
+        HAL_GPIO_WritePin(DEBUG_LED_PORT, DEBUG_LED_PIN, GPIO_PIN_SET);
+    }
+    else
+    {
+        HAL_GPIO_WritePin(DEBUG_LED_PORT, DEBUG_LED_PIN, GPIO_PIN_RESET);
+    }
+
+    /* Check PLL lock */
+    if (App_PLL_IsLocked() != 0U)
+    {
+        State_Transition(STATE_SOFT_START_PFC);
+        return;
+    }
+
+    /* Timeout check */
+    if (elapsed >= PLL_LOCK_TIMEOUT_MS)
+    {
+        App_Diagnostics_Log("[SM] PLL lock timeout");
+        Fault_Enter(FAULT_PLL_UNLOCK);
+        State_Transition(STATE_FAULT);
+    }
+}
+
+/**
+ * @brief  SOFT_START_PFC — PFC open-loop bring-up
+ *
+ * PFC outputs are already running at 30% duty (started in STANDBY).
+ * For open-loop bring-up, immediately transition to LLC soft-start.
+ * Closed-loop Id* ramp comes in a later story.
+ */
+static void state_soft_start_pfc(void)
+{
+    /* Open-loop: PFC already switching at fixed duty — skip to LLC */
+    App_Diagnostics_Log("[SM] PFC open-loop — skip to LLC");
+    State_Transition(STATE_SOFT_START_LLC);
+}
+
+/**
+ * @brief  SOFT_START_LLC — staggered phase enable + frequency ramp
+ *
+ * Uses PowerSequence API for controlled LLC soft-start with
+ * staggered phase enables and frequency ramp to target voltage.
+ * LED double-blinks (200 ms period) to distinguish from PLL_LOCK.
+ */
+static void state_soft_start_llc(void)
+{
+    uint32_t elapsed = HAL_GetTick() - s_state_entry_tick;
+
+    /* First tick after entry — begin soft-start sequence */
+    if (elapsed == 0U)
+    {
+        LLC_SoftStart_Begin();
+    }
+
+    /* LED double-blink — 200 ms period */
+    uint32_t phase = (elapsed / 100U) % 4U;
+    if ((phase == 0U) || (phase == 2U))
+    {
+        HAL_GPIO_WritePin(DEBUG_LED_PORT, DEBUG_LED_PIN, GPIO_PIN_SET);
+    }
+    else
+    {
+        HAL_GPIO_WritePin(DEBUG_LED_PORT, DEBUG_LED_PIN, GPIO_PIN_RESET);
+    }
+
+    /* Advance soft-start (1 kHz tick rate) */
+    if (LLC_SoftStart_Tick() != 0U)
+    {
+        /* ZVS results already logged by sweep completion handler */
+        (void)App_Control_LLC_GetZVSResult();
+        App_Diagnostics_Log("[SM] LLC soft-start complete");
+        State_Transition(STATE_RUN);
+        return;
+    }
+
+    /* Timeout — soft-start took too long */
+    if (elapsed >= STARTUP_TIMEOUT_MS)
+    {
+        App_Diagnostics_Log("[SM] LLC soft-start timeout");
+        App_Control_LLC_Stop();
+        App_Control_PFC_Stop();
+        Fault_Enter(FAULT_STARTUP_TIMEOUT);
+        State_Transition(STATE_FAULT);
     }
 }
 
@@ -193,15 +301,15 @@ void App_SM_Run(void)
         break;
 
     case STATE_PLL_LOCK:
-        /* TODO: EP-03-003 — SRF-PLL locking to grid */
+        state_pll_lock();
         break;
 
     case STATE_SOFT_START_PFC:
-        /* TODO: EP-03-004 — PFC I_d* ramp 0 -> rated over 200 ms */
+        state_soft_start_pfc();
         break;
 
     case STATE_SOFT_START_LLC:
-        /* TODO: EP-03-005 — LLC frequency ramp 300 kHz -> operating point */
+        state_soft_start_llc();
         break;
 
     case STATE_RUN:

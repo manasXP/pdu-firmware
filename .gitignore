@@ -28,6 +28,9 @@ Release/
 .DS_Store
 Thumbs.db
 
+# Local build overrides
+local.mk
+
 # Lint / analysis output
 *.pclint
 cppcheck-results/

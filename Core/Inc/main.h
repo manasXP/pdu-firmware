@@ -101,6 +101,10 @@ extern "C" {
 #define LLC_FREQ_MAX_HZ        300000U   /* 300 kHz — safe startup     */
 #define LLC_FREQ_RESONANT_HZ   150000U   /* ~150 kHz expected fr       */
 #define LLC_DEADTIME_TICKS     272U      /* 200 ns @ MUL8 (1.36 GHz)  */
+#define LLC_TURNS_RATIO        2.0f      /* Transformer turns ratio n  */
+#define LLC_FREQ_FR2_HZ        139400U   /* Parallel resonant freq (ZVS boundary) */
+#define LLC_SOFTSTART_TARGET_V 400.0f   /* Default output target (V) */
+#define LLC_SOFTSTART_TOLERANCE 0.05f   /* 5% window for contactor close */
 
 /* ------------------------------------------------------------------ */
 /*  NVIC Priorities                                                    */

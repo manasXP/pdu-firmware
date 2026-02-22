@@ -4,10 +4,12 @@
  */
 
 #include "app_control.h"
+#include "app_protection.h"
 #include "app_pll.h"
 #include "app_adc.h"
 #include "app_diagnostics.h"
 #include "main.h"
+#include <math.h>
 #include <stdio.h>
 
 /* ------------------------------------------------------------------ */
@@ -45,17 +47,40 @@
 #define LLC_SWEEP_SETTLE_MS    50U
 
 /* ------------------------------------------------------------------ */
+/*  ZVS Detection Constants                                            */
+/* ------------------------------------------------------------------ */
+
+/** @brief  Max sweep data points: (300k - 100k) / 2k + 1 = 101 */
+#define SWEEP_MAX_POINTS       101U
+
+/** @brief  Second derivative threshold for ZVS boundary inflection */
+#define ZVS_D2GAIN_THRESHOLD   0.0005f
+
+/* ------------------------------------------------------------------ */
 /*  LLC Sweep State                                                    */
 /* ------------------------------------------------------------------ */
 
+/** @brief  Per-point sample recorded during sweep */
 typedef struct
 {
     uint32_t freq_hz;
-    uint32_t step_hz;
-    uint32_t settle_ms;
-    uint32_t settle_count;
-    uint8_t  active;
-    uint8_t  done;
+    float    v_out;
+    float    i_out;
+    float    gain;
+} SweepSample_t;
+
+typedef struct
+{
+    uint32_t       freq_hz;
+    uint32_t       step_hz;
+    uint32_t       settle_ms;
+    uint32_t       settle_count;
+    uint8_t        active;
+    uint8_t        done;
+    LLC_SweepMode_t mode;
+    SweepSample_t  samples[SWEEP_MAX_POINTS];
+    uint16_t       sample_count;
+    ZVS_Result_t   zvs_result;
 } LLC_Sweep_t;
 
 static LLC_Sweep_t s_llc_sweep;
@@ -552,6 +577,40 @@ void App_Control_HRTIM_LLC_Init(void)
 }
 
 /**
+ * @brief  Start a single LLC phase (Timer D/E/F) with its two outputs
+ * @param  phase  0 = Timer D (TD1/TD2), 1 = Timer E (TE1/TE2), 2 = Timer F (TF1/TF2)
+ *
+ * Timer D must always start first since Timer E and F are cross-reset
+ * from Timer D CMP2/CMP4.
+ */
+void App_Control_LLC_StartPhase(uint32_t phase)
+{
+    uint32_t timer_id;
+    uint32_t outputs;
+
+    switch (phase)
+    {
+    case 0U:
+        timer_id = HRTIM_TIMERID_TIMER_D;
+        outputs  = HRTIM_OUTPUT_TD1 | HRTIM_OUTPUT_TD2;
+        break;
+    case 1U:
+        timer_id = HRTIM_TIMERID_TIMER_E;
+        outputs  = HRTIM_OUTPUT_TE1 | HRTIM_OUTPUT_TE2;
+        break;
+    case 2U:
+        timer_id = HRTIM_TIMERID_TIMER_F;
+        outputs  = HRTIM_OUTPUT_TF1 | HRTIM_OUTPUT_TF2;
+        break;
+    default:
+        return;
+    }
+
+    HAL_HRTIM_WaveformCountStart(&hhrtim1, timer_id);
+    HAL_HRTIM_WaveformOutputStart(&hhrtim1, outputs);
+}
+
+/**
  * @brief  Start LLC PWM outputs — Timer D/E/F counters + all 6 outputs
  */
 void App_Control_LLC_Start(void)
@@ -628,12 +687,191 @@ void App_Control_LLC_SetFrequency(uint32_t freq_hz)
 /* ------------------------------------------------------------------ */
 
 /**
- * @brief  Start open-loop frequency sweep: 300 kHz → 100 kHz
+ * @brief  Analyze recorded gain curve to detect ZVS boundary
  *
- * Initializes sweep state and starts LLC outputs. Call App_Control_LLC_Sweep()
- * from the main loop at 1 kHz to advance the sweep.
+ * Computes first and second derivatives of M(f) using central differences,
+ * then scans from high-freq to low-freq for |d²M/df²| > threshold.
+ * The inflection point marks the ZVS boundary (parallel resonant freq).
+ *
+ * @param  phase_idx  Index into zvs_result.phase[] (0=D, 1=E, 2=F)
  */
-void App_Control_LLC_SweepStart(void)
+static void zvs_analyze_gain_curve(uint8_t phase_idx)
+{
+    ZVS_PhaseResult_t *result = &s_llc_sweep.zvs_result.phase[phase_idx];
+    result->zvs_boundary_hz = 0U;
+    result->zvs_margin_hz   = 0;
+    result->zvs_lost        = 0U;
+    result->valid           = 0U;
+
+    uint16_t n = s_llc_sweep.sample_count;
+    if (n < 5U)
+    {
+        return; /* Not enough points for derivative analysis */
+    }
+
+    const SweepSample_t *s = s_llc_sweep.samples;
+
+    /*
+     * Scan from index 2 to n-3 (need neighbors for central differences).
+     * Samples are ordered high-freq (idx 0) to low-freq (idx n-1).
+     * Frequency step df is constant = step_hz (negative direction).
+     */
+    float df = (float)s_llc_sweep.step_hz;
+    uint32_t boundary_freq = 0U;
+
+    for (uint16_t i = 2U; i < (n - 2U); i++)
+    {
+        /* First derivatives at i-1 and i+1 */
+        float dm_prev = (s[i].gain - s[i - 2U].gain) / (2.0f * df);
+        float dm_next = (s[i + 2U].gain - s[i].gain) / (2.0f * df);
+
+        /* Second derivative at i */
+        float d2m = (dm_next - dm_prev) / (2.0f * df);
+
+        if (fabsf(d2m) > ZVS_D2GAIN_THRESHOLD)
+        {
+            boundary_freq = s[i].freq_hz;
+            break;
+        }
+    }
+
+    if (boundary_freq == 0U)
+    {
+        /* No inflection detected — ZVS maintained across full range */
+        result->zvs_boundary_hz = LLC_FREQ_MIN_HZ;
+        result->zvs_margin_hz   = (int32_t)LLC_FREQ_MIN_HZ
+                                - (int32_t)LLC_FREQ_FR2_HZ;
+        result->zvs_lost        = 0U;
+        result->valid           = 1U;
+        return;
+    }
+
+    result->zvs_boundary_hz = boundary_freq;
+    result->zvs_margin_hz   = (int32_t)boundary_freq
+                            - (int32_t)LLC_FREQ_FR2_HZ;
+    result->valid            = 1U;
+
+    /* Estimate resonant frequency as the detected inflection */
+    s_llc_sweep.zvs_result.estimated_fr_hz = boundary_freq;
+
+    /*
+     * Check if sweep went below the boundary — if the lowest frequency
+     * in the sweep data is below the boundary, ZVS was lost.
+     */
+    uint32_t lowest_freq = s[n - 1U].freq_hz;
+    if (lowest_freq < boundary_freq)
+    {
+        result->zvs_lost = 1U;
+    }
+}
+
+/**
+ * @brief  Log ZVS analysis results and raise warning if ZVS lost
+ */
+static void zvs_log_results(void)
+{
+    static const char *const phase_names[3] = {"D", "E", "F"};
+    char buf[80];
+    uint8_t any_lost = 0U;
+
+    for (uint8_t i = 0U; i < 3U; i++)
+    {
+        const ZVS_PhaseResult_t *p = &s_llc_sweep.zvs_result.phase[i];
+        if (p->valid == 0U)
+        {
+            (void)snprintf(buf, sizeof(buf),
+                           "ZVS Phase %s: no data", phase_names[i]);
+        }
+        else
+        {
+            (void)snprintf(buf, sizeof(buf),
+                           "ZVS Phase %s: boundary=%lu Hz margin=%+ld Hz %s",
+                           phase_names[i],
+                           (unsigned long)p->zvs_boundary_hz,
+                           (long)p->zvs_margin_hz,
+                           (p->zvs_lost != 0U) ? "LOST" : "OK");
+        }
+        App_Diagnostics_Log(buf);
+
+        if (p->zvs_lost != 0U)
+        {
+            any_lost = 1U;
+        }
+    }
+
+    if (any_lost != 0U)
+    {
+        Fault_Enter(FAULT_ZVS_LOSS);
+    }
+}
+
+/**
+ * @brief  Start single-phase LLC outputs for per-phase sweep
+ * @param  mode  Sweep mode selecting which phase to drive
+ */
+static void llc_start_single_phase(LLC_SweepMode_t mode)
+{
+    uint32_t timer_id;
+    uint32_t outputs;
+
+    switch (mode)
+    {
+    case SWEEP_MODE_PHASE_D:
+        timer_id = HRTIM_TIMERID_TIMER_D;
+        outputs  = HRTIM_OUTPUT_TD1 | HRTIM_OUTPUT_TD2;
+        break;
+    case SWEEP_MODE_PHASE_E:
+        timer_id = HRTIM_TIMERID_TIMER_D | HRTIM_TIMERID_TIMER_E;
+        outputs  = HRTIM_OUTPUT_TE1 | HRTIM_OUTPUT_TE2;
+        break;
+    case SWEEP_MODE_PHASE_F:
+        timer_id = HRTIM_TIMERID_TIMER_D | HRTIM_TIMERID_TIMER_F;
+        outputs  = HRTIM_OUTPUT_TF1 | HRTIM_OUTPUT_TF2;
+        break;
+    default:
+        return;
+    }
+
+    HAL_HRTIM_WaveformCountStart(&hhrtim1, timer_id);
+    HAL_HRTIM_WaveformOutputStart(&hhrtim1, outputs);
+}
+
+/**
+ * @brief  Stop single-phase LLC outputs
+ * @param  mode  Sweep mode selecting which phase to stop
+ */
+static void llc_stop_single_phase(LLC_SweepMode_t mode)
+{
+    uint32_t timer_id;
+    uint32_t outputs;
+
+    switch (mode)
+    {
+    case SWEEP_MODE_PHASE_D:
+        timer_id = HRTIM_TIMERID_TIMER_D;
+        outputs  = HRTIM_OUTPUT_TD1 | HRTIM_OUTPUT_TD2;
+        break;
+    case SWEEP_MODE_PHASE_E:
+        timer_id = HRTIM_TIMERID_TIMER_D | HRTIM_TIMERID_TIMER_E;
+        outputs  = HRTIM_OUTPUT_TE1 | HRTIM_OUTPUT_TE2;
+        break;
+    case SWEEP_MODE_PHASE_F:
+        timer_id = HRTIM_TIMERID_TIMER_D | HRTIM_TIMERID_TIMER_F;
+        outputs  = HRTIM_OUTPUT_TF1 | HRTIM_OUTPUT_TF2;
+        break;
+    default:
+        return;
+    }
+
+    HAL_HRTIM_WaveformOutputStop(&hhrtim1, outputs);
+    HAL_HRTIM_WaveformCountStop(&hhrtim1, timer_id);
+}
+
+/**
+ * @brief  Start extended open-loop frequency sweep with mode selection
+ * @param  mode  SWEEP_MODE_ALL or SWEEP_MODE_PHASE_D/E/F
+ */
+void App_Control_LLC_SweepStartEx(LLC_SweepMode_t mode)
 {
     s_llc_sweep.freq_hz      = LLC_FREQ_MAX_HZ;
     s_llc_sweep.step_hz      = LLC_SWEEP_STEP_HZ;
@@ -641,16 +879,48 @@ void App_Control_LLC_SweepStart(void)
     s_llc_sweep.settle_count = LLC_SWEEP_SETTLE_MS;
     s_llc_sweep.active       = 1U;
     s_llc_sweep.done         = 0U;
+    s_llc_sweep.mode         = mode;
+    s_llc_sweep.sample_count = 0U;
+
+    /* Zero out ZVS results */
+    for (uint8_t i = 0U; i < 3U; i++)
+    {
+        s_llc_sweep.zvs_result.phase[i].zvs_boundary_hz = 0U;
+        s_llc_sweep.zvs_result.phase[i].zvs_margin_hz   = 0;
+        s_llc_sweep.zvs_result.phase[i].zvs_lost         = 0U;
+        s_llc_sweep.zvs_result.phase[i].valid            = 0U;
+    }
+    s_llc_sweep.zvs_result.estimated_fr_hz = 0U;
 
     App_Control_LLC_SetFrequency(LLC_FREQ_MAX_HZ);
-    App_Control_LLC_Start();
+
+    if (mode == SWEEP_MODE_ALL)
+    {
+        App_Control_LLC_Start();
+    }
+    else
+    {
+        llc_start_single_phase(mode);
+    }
+}
+
+/**
+ * @brief  Start open-loop frequency sweep: 300 kHz → 100 kHz (all phases)
+ *
+ * Initializes sweep state and starts LLC outputs. Call App_Control_LLC_Sweep()
+ * from the main loop at 1 kHz to advance the sweep.
+ */
+void App_Control_LLC_SweepStart(void)
+{
+    App_Control_LLC_SweepStartEx(SWEEP_MODE_ALL);
 }
 
 /**
  * @brief  Advance LLC frequency sweep — call from main loop at 1 kHz
  *
- * Each step: wait for settling, log V_out/I_out, check safety limits,
- * decrement frequency by step_hz. Sweep completes at LLC_FREQ_MIN_HZ.
+ * Each step: wait for settling, record sample with gain, log data,
+ * check safety limits, decrement frequency. On completion, runs
+ * ZVS gain curve analysis and logs results.
  */
 void App_Control_LLC_Sweep(void)
 {
@@ -670,19 +940,46 @@ void App_Control_LLC_Sweep(void)
     const ADC_Readings_t *adc = App_ADC_GetReadings();
     float v_out = adc->v_out;
     float i_out = adc->i_out;
+    float v_bus = adc->v_bus;
 
-    /* Log sweep data point */
-    char log_buf[64];
+    /* Compute gain: M = V_out / (V_bus / (2 * n)) */
+    float gain = 0.0f;
+    float v_bus_reflected = v_bus / (2.0f * LLC_TURNS_RATIO);
+    if (v_bus_reflected > 1.0f)
+    {
+        gain = v_out / v_bus_reflected;
+    }
+
+    /* Record sample */
+    if (s_llc_sweep.sample_count < SWEEP_MAX_POINTS)
+    {
+        SweepSample_t *sp = &s_llc_sweep.samples[s_llc_sweep.sample_count];
+        sp->freq_hz = s_llc_sweep.freq_hz;
+        sp->v_out   = v_out;
+        sp->i_out   = i_out;
+        sp->gain    = gain;
+        s_llc_sweep.sample_count++;
+    }
+
+    /* Log sweep data point with gain */
+    char log_buf[80];
     (void)snprintf(log_buf, sizeof(log_buf),
-                   "SWEEP %lu Hz Vout=%.1f Iout=%.1f",
+                   "SWEEP %lu Hz Vout=%.1f Iout=%.1f M=%.3f",
                    (unsigned long)s_llc_sweep.freq_hz, (double)v_out,
-                   (double)i_out);
+                   (double)i_out, (double)gain);
     App_Diagnostics_Log(log_buf);
 
     /* Safety check — abort on OVP or OCP */
     if ((v_out > OUT_OVP_THRESHOLD_V) || (i_out > PFC_OCP_THRESHOLD_A))
     {
-        App_Control_LLC_Stop();
+        if (s_llc_sweep.mode == SWEEP_MODE_ALL)
+        {
+            App_Control_LLC_Stop();
+        }
+        else
+        {
+            llc_stop_single_phase(s_llc_sweep.mode);
+        }
         s_llc_sweep.active = 0U;
         s_llc_sweep.done   = 1U;
         App_Diagnostics_Log("SWEEP ABORT: safety limit");
@@ -692,8 +989,51 @@ void App_Control_LLC_Sweep(void)
     /* Decrement frequency */
     if (s_llc_sweep.freq_hz <= (LLC_FREQ_MIN_HZ + s_llc_sweep.step_hz))
     {
-        /* Sweep complete */
-        App_Control_LLC_Stop();
+        /* Sweep complete — stop outputs */
+        if (s_llc_sweep.mode == SWEEP_MODE_ALL)
+        {
+            App_Control_LLC_Stop();
+        }
+        else
+        {
+            llc_stop_single_phase(s_llc_sweep.mode);
+        }
+
+        /* Run ZVS gain curve analysis */
+        uint8_t phase_idx;
+        switch (s_llc_sweep.mode)
+        {
+        case SWEEP_MODE_PHASE_D:
+            phase_idx = 0U;
+            break;
+        case SWEEP_MODE_PHASE_E:
+            phase_idx = 1U;
+            break;
+        case SWEEP_MODE_PHASE_F:
+            phase_idx = 2U;
+            break;
+        default:
+            /* All-phase sweep: analyze as phase D (shared tank) */
+            phase_idx = 0U;
+            break;
+        }
+
+        zvs_analyze_gain_curve(phase_idx);
+
+        /*
+         * For all-phase mode, copy result to phases E and F since
+         * they share the same resonant tank and see the same V_out.
+         */
+        if (s_llc_sweep.mode == SWEEP_MODE_ALL)
+        {
+            s_llc_sweep.zvs_result.phase[1] =
+                s_llc_sweep.zvs_result.phase[0];
+            s_llc_sweep.zvs_result.phase[2] =
+                s_llc_sweep.zvs_result.phase[0];
+        }
+
+        zvs_log_results();
+
         s_llc_sweep.active = 0U;
         s_llc_sweep.done   = 1U;
         App_Diagnostics_Log("SWEEP COMPLETE");
@@ -712,4 +1052,13 @@ void App_Control_LLC_Sweep(void)
 uint8_t App_Control_LLC_SweepDone(void)
 {
     return s_llc_sweep.done;
+}
+
+/**
+ * @brief  Get ZVS analysis results from last completed sweep
+ * @return Pointer to static ZVS result structure
+ */
+const ZVS_Result_t *App_Control_LLC_GetZVSResult(void)
+{
+    return &s_llc_sweep.zvs_result;
 }

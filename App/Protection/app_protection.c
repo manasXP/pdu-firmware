@@ -50,7 +50,9 @@ static const FaultSeverity_t s_severity_table[FAULT_COUNT] = {
     [FAULT_SHORT_CIRCUIT]  = FAULT_SEV_CRITICAL,
     [FAULT_INRUSH_TIMEOUT] = FAULT_SEV_MAJOR,
     [FAULT_WATCHDOG]       = FAULT_SEV_CRITICAL,
-    [FAULT_FLASH_ERROR]    = FAULT_SEV_WARNING,
+    [FAULT_FLASH_ERROR]       = FAULT_SEV_WARNING,
+    [FAULT_STARTUP_TIMEOUT]   = FAULT_SEV_MAJOR,
+    [FAULT_ZVS_LOSS]          = FAULT_SEV_WARNING,
 };
 
 void App_Protection_Init(void)
