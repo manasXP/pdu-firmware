@@ -28,6 +28,11 @@ extern void App_Control_PFC_ISR(void);
 /** @brief  Provided by App/Protection — HRTIM fault handler */
 extern void App_Protection_FaultISR(void);
 
+/** @brief  Provided by App/Diagnostics — UART Rx byte callback */
+extern void App_Diagnostics_RxCallback(void);
+
+extern UART_HandleTypeDef huart2;
+
 /* ------------------------------------------------------------------ */
 /*  Cortex-M4 System Exceptions                                        */
 /* ------------------------------------------------------------------ */
@@ -170,4 +175,27 @@ void DMA2_Channel2_IRQHandler(void)
 void DMA2_Channel3_IRQHandler(void)
 {
     HAL_DMA_IRQHandler(&hdma_adc5);
+}
+
+/* ------------------------------------------------------------------ */
+/*  USART2 Interrupt (Diagnostics CLI)                                  */
+/* ------------------------------------------------------------------ */
+
+/**
+ * @brief  USART2 interrupt — UART Rx for CLI input
+ */
+void USART2_IRQHandler(void)
+{
+    HAL_UART_IRQHandler(&huart2);
+}
+
+/**
+ * @brief  HAL UART Rx complete callback — dispatches to diagnostics
+ */
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
+{
+    if (huart->Instance == USART2)
+    {
+        App_Diagnostics_RxCallback();
+    }
 }

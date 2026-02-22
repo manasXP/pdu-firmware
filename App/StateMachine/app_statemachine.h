@@ -31,5 +31,6 @@ void        App_SM_Run(void);
 void        App_SM_TickISR(void);
 AppState_t  App_SM_GetState(void);
 const char *App_SM_GetStateName(void);
+void        App_SM_RequestEnable(void);
 
 #endif /* APP_STATEMACHINE_H */

@@ -45,11 +45,20 @@ static volatile uint8_t    s_enable_requested = 0;
 /*  LED timing constants                                               */
 /* ------------------------------------------------------------------ */
 
+/** @brief  Fault retry max — must match app_protection.c */
+#define FAULT_RETRY_MAX        3U
+
 /** @brief  LED toggle period in DISABLED state (ms) */
 #define DISABLED_LED_BLINK_MS  500U
 
 /** @brief  LED toggle period in PLL_LOCK state (ms) — fast blink */
 #define PLL_LOCK_LED_BLINK_MS  100U
+
+/** @brief  Shutdown sequence timing (ms) */
+#define SHUTDOWN_LLC_OFF_MS    0U
+#define SHUTDOWN_PFC_OFF_MS    100U
+#define SHUTDOWN_RELAY_OFF_MS  200U
+#define SHUTDOWN_TIMEOUT_MS    3000U
 
 /* ------------------------------------------------------------------ */
 /*  State transition helper                                            */
@@ -227,6 +236,95 @@ static void state_soft_start_llc(void)
 }
 
 /**
+ * @brief  STATE_FAULT — outputs disabled, recovery or latch
+ *
+ * LED solid ON (fault indication).
+ * Flushes fault log to flash, checks recovery eligibility.
+ * Transitions: STANDBY (diag clear), PLL_LOCK (major recovery),
+ *              DISABLED (latched + retries exhausted).
+ */
+static void state_fault(void)
+{
+    /* LED solid ON — fault indication */
+    HAL_GPIO_WritePin(DEBUG_LED_PORT, DEBUG_LED_PIN, GPIO_PIN_SET);
+
+    /* Deferred flash write */
+    App_Protection_FlashSync();
+
+    /* Check auto-recovery for major faults */
+    Fault_Recovery_Check();
+
+    const FaultStatus_t *fs = App_Protection_GetActiveFault();
+
+    /* DiagClear was issued — fault cleared externally */
+    if (fs->active_source >= FAULT_COUNT)
+    {
+        App_Diagnostics_Log("[SM] Fault cleared by diag — STANDBY");
+        State_Transition(STATE_STANDBY);
+        return;
+    }
+
+    /* Latched + retries exhausted → permanent disable */
+    if ((fs->latched != 0U) && (fs->retry_count > FAULT_RETRY_MAX))
+    {
+        App_Diagnostics_Log("[SM] Fault latched — DISABLED");
+        State_Transition(STATE_DISABLED);
+        return;
+    }
+
+    /* Major fault auto-recovered (fault_active cleared by Recovery_Check) */
+    if (App_Protection_IsFaultActive() == 0U)
+    {
+        App_Diagnostics_Log("[SM] Major fault recovered — PLL_LOCK");
+        App_Control_PFC_Start();
+        State_Transition(STATE_PLL_LOCK);
+    }
+}
+
+/**
+ * @brief  STATE_SHUTDOWN — controlled ramp-down sequence
+ *
+ * t=0:      LLC stop
+ * t=100 ms: PFC stop
+ * t=200 ms: open relays, transition to STANDBY
+ * t=3 s:    timeout → FAULT
+ */
+static void state_shutdown(void)
+{
+    uint32_t elapsed = HAL_GetTick() - s_state_entry_tick;
+
+    /* t=0: LLC stop (immediate on entry) */
+    if (elapsed <= SHUTDOWN_LLC_OFF_MS)
+    {
+        App_Control_LLC_Stop();
+    }
+
+    /* t=100 ms: PFC stop */
+    if (elapsed >= SHUTDOWN_PFC_OFF_MS)
+    {
+        App_Control_PFC_Stop();
+    }
+
+    /* t=200 ms: open relays and transition to STANDBY */
+    if (elapsed >= SHUTDOWN_RELAY_OFF_MS)
+    {
+        HAL_GPIO_WritePin(RELAY_PFC_PORT, RELAY_PFC_PIN, GPIO_PIN_RESET);
+        HAL_GPIO_WritePin(RELAY_LLC_PORT, RELAY_LLC_PIN, GPIO_PIN_RESET);
+        App_Diagnostics_Log("[SM] Shutdown complete — STANDBY");
+        State_Transition(STATE_STANDBY);
+        return;
+    }
+
+    /* t=3 s: timeout failsafe */
+    if (elapsed >= SHUTDOWN_TIMEOUT_MS)
+    {
+        App_Diagnostics_Log("[SM] Shutdown timeout");
+        Fault_Enter(FAULT_STARTUP_TIMEOUT);
+        State_Transition(STATE_FAULT);
+    }
+}
+
+/**
  * @brief  DISABLED — safe state, requires power cycle to exit
  *
  * Ensures relay GPIOs are driven low (safe outputs).
@@ -321,11 +419,11 @@ void App_SM_Run(void)
         break;
 
     case STATE_FAULT:
-        /* TODO: EP-03-008 — Fault active — outputs disabled */
+        state_fault();
         break;
 
     case STATE_SHUTDOWN:
-        /* TODO: EP-03-009 — Controlled ramp-down */
+        state_shutdown();
         break;
 
     case STATE_DISABLED:
@@ -336,6 +434,16 @@ void App_SM_Run(void)
         State_Transition(STATE_FAULT);
         break;
     }
+}
+
+/**
+ * @brief  Request enable — triggers STANDBY → PLL_LOCK transition
+ *
+ * Can be called from CLI or CAN command handler.
+ */
+void App_SM_RequestEnable(void)
+{
+    s_enable_requested = 1U;
 }
 
 /**
