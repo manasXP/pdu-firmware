@@ -46,5 +46,6 @@ void             App_CAN_Tick(void);
 uint8_t          App_CAN_GetNodeID(void);
 const CAN_Command_t *App_CAN_GetCommand(void);
 uint8_t          App_CAN_IsWatchdogExpired(void);
+uint8_t          App_CAN_IsWatchdogWarning(void);
 
 #endif /* APP_CAN_H */

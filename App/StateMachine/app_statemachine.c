@@ -4,6 +4,7 @@
  */
 
 #include "app_statemachine.h"
+#include "app_adc.h"
 #include "app_can.h"
 #include "app_control.h"
 #include "app_npbalance.h"
@@ -54,6 +55,9 @@ static volatile uint8_t    s_enable_requested = 0;
 
 /** @brief  LED toggle period in PLL_LOCK state (ms) — fast blink */
 #define PLL_LOCK_LED_BLINK_MS  100U
+
+/** @brief  LED toggle period in DERATE state (ms) — medium blink */
+#define DERATE_LED_BLINK_MS    250U
 
 /** @brief  Shutdown failsafe timeout (ms) */
 #define SHUTDOWN_TIMEOUT_MS    3000U
@@ -267,6 +271,125 @@ static void state_soft_start_llc(void)
 }
 
 /**
+ * @brief  STATE_RUN — normal CC/CV charging operation
+ *
+ * LED steady ON as normal operation indicator.
+ * Runs burst mode sub-state and neutral point balancing.
+ * Monitors thermal conditions, CAN commands, and fault status.
+ * Transitions: DERATE (thermal/CAN warn), SHUTDOWN (stop cmd),
+ *              FAULT (any active fault).
+ */
+static void state_run(void)
+{
+    /* LED steady ON — normal operation */
+    HAL_GPIO_WritePin(DEBUG_LED_PORT, DEBUG_LED_PIN, GPIO_PIN_SET);
+
+    /* Neutral point balancing and burst mode sub-state */
+    NP_Balance_Update();
+    Burst_Mode_Tick();
+
+    /* Check for active fault (HW comparator or SW) → FAULT */
+    if (App_Protection_IsFaultActive() != 0U)
+    {
+        App_Control_LLC_Stop();
+        App_Control_PFC_Stop();
+        State_Transition(STATE_FAULT);
+        return;
+    }
+
+    /* Check thermal derate required */
+    const ADC_Readings_t *adc = App_ADC_GetReadings();
+    float derate = Thermal_Derate_Calc(adc);
+
+    if (derate < 1.0f)
+    {
+        App_Diagnostics_Log("[SM] Thermal derate — DERATE");
+        State_Transition(STATE_DERATE);
+        return;
+    }
+
+    /* CAN watchdog 50 ms warning → DERATE (reduce power) */
+    if (App_CAN_IsWatchdogWarning() != 0U)
+    {
+        App_Diagnostics_Log("[SM] CAN watchdog warn — DERATE");
+        State_Transition(STATE_DERATE);
+        return;
+    }
+
+    /* CAN stop command (enable=0 while valid) → SHUTDOWN */
+    const CAN_Command_t *cmd = App_CAN_GetCommand();
+
+    if ((cmd->valid != 0U) && (cmd->enable == 0U))
+    {
+        App_Diagnostics_Log("[SM] CAN stop — SHUTDOWN");
+        State_Transition(STATE_SHUTDOWN);
+    }
+}
+
+/**
+ * @brief  STATE_DERATE — thermal or CAN derate active
+ *
+ * Medium LED blink (250 ms toggle) as derate indicator.
+ * Recomputes thermal derate each tick; returns to RUN when cleared.
+ * Transitions: RUN (derate cleared), SHUTDOWN (stop cmd),
+ *              FAULT (critical fault or zero derate).
+ */
+static void state_derate(void)
+{
+    /* LED medium blink — 250 ms toggle for derate indication */
+    uint32_t elapsed = HAL_GetTick() - s_state_entry_tick;
+
+    if ((elapsed / DERATE_LED_BLINK_MS) % 2U == 0U)
+    {
+        HAL_GPIO_WritePin(DEBUG_LED_PORT, DEBUG_LED_PIN, GPIO_PIN_SET);
+    }
+    else
+    {
+        HAL_GPIO_WritePin(DEBUG_LED_PORT, DEBUG_LED_PIN, GPIO_PIN_RESET);
+    }
+
+    /* Neutral point balancing continues during derate */
+    NP_Balance_Update();
+
+    /* Check for active fault → FAULT */
+    if (App_Protection_IsFaultActive() != 0U)
+    {
+        App_Control_LLC_Stop();
+        App_Control_PFC_Stop();
+        State_Transition(STATE_FAULT);
+        return;
+    }
+
+    /* Recompute thermal derate — also handles hysteresis internally */
+    const ADC_Readings_t *adc = App_ADC_GetReadings();
+    float derate = Thermal_Derate_Calc(adc);
+
+    /*
+     * TODO: Apply derate factor to control setpoints (EP-04-001)
+     *   i_ref_eff = i_ref * derate;
+     *   Update LLC PI setpoint via App_Control_LLC_SetCurrentRef()
+     */
+
+    /* Derate cleared — all thermal zones recovered (with hysteresis) and
+     * CAN watchdog no longer in warning */
+    if ((derate >= 1.0f) && (App_CAN_IsWatchdogWarning() == 0U))
+    {
+        App_Diagnostics_Log("[SM] Derate cleared — RUN");
+        State_Transition(STATE_RUN);
+        return;
+    }
+
+    /* CAN stop command → SHUTDOWN */
+    const CAN_Command_t *cmd = App_CAN_GetCommand();
+
+    if ((cmd->valid != 0U) && (cmd->enable == 0U))
+    {
+        App_Diagnostics_Log("[SM] CAN stop — SHUTDOWN");
+        State_Transition(STATE_SHUTDOWN);
+    }
+}
+
+/**
  * @brief  STATE_FAULT — outputs disabled, recovery or latch
  *
  * LED solid ON (fault indication).
@@ -443,14 +566,11 @@ void App_SM_Run(void)
         break;
 
     case STATE_RUN:
-        NP_Balance_Update();
-        Burst_Mode_Tick();
-        /* TODO: EP-03-006 — Normal operation — CC/CV charging */
+        state_run();
         break;
 
     case STATE_DERATE:
-        NP_Balance_Update();
-        /* TODO: EP-03-007 — Thermal or CAN derate active */
+        state_derate();
         break;
 
     case STATE_FAULT:

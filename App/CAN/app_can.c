@@ -145,6 +145,17 @@ uint8_t App_CAN_IsWatchdogExpired(void)
     return (elapsed >= CAN_WATCHDOG_SHUTDOWN_MS) ? 1U : 0U;
 }
 
+uint8_t App_CAN_IsWatchdogWarning(void)
+{
+    if (s_cmd_received == 0U)
+    {
+        return 0U;
+    }
+
+    uint32_t elapsed = HAL_GetTick() - s_last_cmd_tick;
+    return (elapsed >= CAN_WATCHDOG_WARN_MS) ? 1U : 0U;
+}
+
 /**
  * @brief  Broadcast current state over FDCAN1
  * @param  state  Current AppState_t value (0-9)
