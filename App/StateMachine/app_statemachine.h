@@ -26,8 +26,10 @@ typedef enum
     STATE_COUNT
 } AppState_t;
 
-void       App_SM_Init(void);
-void       App_SM_Run(void);
-AppState_t App_SM_GetState(void);
+void        App_SM_Init(void);
+void        App_SM_Run(void);
+void        App_SM_TickISR(void);
+AppState_t  App_SM_GetState(void);
+const char *App_SM_GetStateName(void);
 
 #endif /* APP_STATEMACHINE_H */

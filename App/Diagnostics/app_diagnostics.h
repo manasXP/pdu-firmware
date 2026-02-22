@@ -8,5 +8,6 @@
 
 void App_Diagnostics_Init(void);
 void App_Diagnostics_Poll(void);
+void App_Diagnostics_Log(const char *msg);
 
 #endif /* APP_DIAGNOSTICS_H */
