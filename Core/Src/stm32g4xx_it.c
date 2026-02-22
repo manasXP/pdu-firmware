@@ -31,7 +31,11 @@ extern void App_Protection_FaultISR(void);
 /** @brief  Provided by App/Diagnostics — UART Rx byte callback */
 extern void App_Diagnostics_RxCallback(void);
 
+/** @brief  Provided by App/Diagnostics — DMA TX complete callback */
+extern void App_Diagnostics_TxCpltCallback(void);
+
 extern UART_HandleTypeDef huart2;
+extern DMA_HandleTypeDef  hdma_usart2_tx;
 
 /* ------------------------------------------------------------------ */
 /*  Cortex-M4 System Exceptions                                        */
@@ -178,7 +182,7 @@ void DMA2_Channel3_IRQHandler(void)
 }
 
 /* ------------------------------------------------------------------ */
-/*  USART2 Interrupt (Diagnostics CLI)                                  */
+/*  USART2 / DMA TX Interrupts (Diagnostics CLI)                        */
 /* ------------------------------------------------------------------ */
 
 /**
@@ -190,6 +194,14 @@ void USART2_IRQHandler(void)
 }
 
 /**
+ * @brief  DMA1 Channel 3 interrupt — USART2 TX DMA
+ */
+void DMA1_Channel3_IRQHandler(void)
+{
+    HAL_DMA_IRQHandler(&hdma_usart2_tx);
+}
+
+/**
  * @brief  HAL UART Rx complete callback — dispatches to diagnostics
  */
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
@@ -197,5 +209,16 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
     if (huart->Instance == USART2)
     {
         App_Diagnostics_RxCallback();
+    }
+}
+
+/**
+ * @brief  HAL UART TX complete callback — kicks next DMA segment
+ */
+void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
+{
+    if (huart->Instance == USART2)
+    {
+        App_Diagnostics_TxCpltCallback();
     }
 }

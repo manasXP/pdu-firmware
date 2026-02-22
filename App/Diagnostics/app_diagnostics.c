@@ -10,11 +10,14 @@
  *   pi show                — Print all PI controller gains and Tt
  *   pi set <name> <Kp> <Ki> — Set PI gains (Tt auto-computed)
  *   pi step <name>         — Run offline step-response test (20 iterations)
+ *   gain <loop> <kp> <ki>  — Alias for 'pi set'
  *   np                     — Print neutral point error and duty offset
- *   enable                 — Request state machine enable (STANDBY → PLL_LOCK)
+ *   enable                 — Request state machine enable (STANDBY -> PLL_LOCK)
  *   status                 — Print state, Vbus, Iout, Vout, temperatures
- *   fault                  — Dump active fault info
+ *   fault                  — Dump fault log ring buffer
  *   version                — Print firmware version
+ *
+ * UART transmit uses DMA to avoid blocking ISR execution.
  */
 
 #include "app_diagnostics.h"
@@ -30,17 +33,31 @@
 #include <stdlib.h>
 
 /* ------------------------------------------------------------------ */
-/*  UART CLI Constants                                                  */
+/*  UART DMA TX Constants                                              */
 /* ------------------------------------------------------------------ */
 
-/** @brief  UART transmit timeout for blocking log calls (ms) */
-#define DIAG_UART_TX_TIMEOUT_MS  50U
+/** @brief  DMA TX ring buffer size (must be power of 2) */
+#define DIAG_TX_BUF_SIZE         1024U
 
 /** @brief  Rx line buffer size (max command length) */
 #define DIAG_RX_BUF_SIZE         64U
 
+/** @brief  UART transmit timeout for echo (blocking, single byte) */
+#define DIAG_ECHO_TIMEOUT_MS     5U
+
 /** @brief  PFC open-loop test running flag */
 static uint8_t s_pfc_test_active;
+
+/* ------------------------------------------------------------------ */
+/*  DMA TX ring buffer state                                           */
+/* ------------------------------------------------------------------ */
+
+static uint8_t  s_tx_buf[DIAG_TX_BUF_SIZE];
+static volatile uint16_t s_tx_head;   /* Next write position (main context) */
+static volatile uint16_t s_tx_tail;   /* Next DMA read position */
+static volatile uint8_t  s_tx_busy;   /* 1 = DMA transfer in progress */
+
+DMA_HandleTypeDef hdma_usart2_tx;
 
 /* ------------------------------------------------------------------ */
 /*  UART Rx state                                                       */
@@ -51,17 +68,70 @@ static uint16_t s_rx_idx;
 static uint8_t  s_rx_byte;
 
 /* ------------------------------------------------------------------ */
+/*  Fault source name table                                            */
+/* ------------------------------------------------------------------ */
+
+static const char *const s_fault_names[] = {
+    "PFC_OCP_HW",    "LLC_OCP_HW",    "BUS_OVP_HW",    "OUT_OVP_HW",
+    "GROUND_FAULT",  "PFC_OCP_SW",    "LLC_OCP_SW",     "BUS_OVP_SW",
+    "BUS_UVP_SW",    "OUT_OVP_SW",    "OUT_OCP_SW",     "OTP_SIC_PFC",
+    "OTP_SIC_LLC",   "OTP_MAG",       "OTP_AMB",        "PHASE_LOSS",
+    "PLL_UNLOCK",    "CAN_TIMEOUT",   "FAN_FAIL",       "NP_IMBAL",
+    "SHORT_CKT",     "INRUSH_TMO",    "WATCHDOG",       "FLASH_ERR",
+    "STARTUP_TMO",   "ZVS_LOSS"
+};
+
+static const char *const s_sev_names[] = {
+    "NONE", "WARN", "MAJOR", "CRIT"
+};
+
+/* ------------------------------------------------------------------ */
 /*  Forward declarations                                                */
 /* ------------------------------------------------------------------ */
 
 static void diag_process_command(char *cmd);
 static void diag_cmd_pfc(const char *args);
 static void diag_cmd_pi(const char *args);
+static void diag_cmd_gain(const char *args);
 static void diag_cmd_np(void);
 static void diag_cmd_status(void);
 static void diag_cmd_fault(void);
 static void diag_cmd_version(void);
 static void diag_print(const char *msg);
+static void diag_tx_enqueue(const uint8_t *data, uint16_t len);
+static void diag_tx_kick(void);
+
+/* ------------------------------------------------------------------ */
+/*  DMA TX setup                                                        */
+/* ------------------------------------------------------------------ */
+
+/**
+ * @brief  Configure DMA1_Channel3 for USART2 TX
+ *
+ * Uses DMAMUX to route USART2_TX request to DMA1_Channel3.
+ * Priority is low (diagnostic output, not time-critical).
+ */
+static void diag_dma_tx_init(void)
+{
+    hdma_usart2_tx.Instance                 = DMA1_Channel3;
+    hdma_usart2_tx.Init.Request             = DMA_REQUEST_USART2_TX;
+    hdma_usart2_tx.Init.Direction           = DMA_MEMORY_TO_PERIPH;
+    hdma_usart2_tx.Init.PeriphInc           = DMA_PINC_DISABLE;
+    hdma_usart2_tx.Init.MemInc              = DMA_MINC_ENABLE;
+    hdma_usart2_tx.Init.PeriphDataAlignment = DMA_PDATAALIGN_BYTE;
+    hdma_usart2_tx.Init.MemDataAlignment    = DMA_MDATAALIGN_BYTE;
+    hdma_usart2_tx.Init.Mode                = DMA_NORMAL;
+    hdma_usart2_tx.Init.Priority            = DMA_PRIORITY_LOW;
+
+    (void)HAL_DMA_Init(&hdma_usart2_tx);
+
+    /* Link DMA handle to UART handle */
+    __HAL_LINKDMA(&huart2, hdmatx, hdma_usart2_tx);
+
+    /* Enable DMA1_Channel3 interrupt */
+    HAL_NVIC_SetPriority(DMA1_Channel3_IRQn, NVIC_PRIO_DMA, 0);
+    HAL_NVIC_EnableIRQ(DMA1_Channel3_IRQn);
+}
 
 /* ------------------------------------------------------------------ */
 /*  Public API                                                          */
@@ -71,6 +141,12 @@ void App_Diagnostics_Init(void)
 {
     s_rx_idx = 0U;
     s_pfc_test_active = 0U;
+    s_tx_head = 0U;
+    s_tx_tail = 0U;
+    s_tx_busy = 0U;
+
+    /* Configure DMA for USART2 TX */
+    diag_dma_tx_init();
 
     /* Start single-byte UART Rx interrupt */
     HAL_UART_Receive_IT(&huart2, &s_rx_byte, 1U);
@@ -80,11 +156,33 @@ void App_Diagnostics_Init(void)
 
 void App_Diagnostics_Poll(void)
 {
-    /* Command parsing is driven by UART Rx callback — nothing to poll */
+    /* Kick DMA TX if data pending and DMA idle */
+    if ((s_tx_busy == 0U) && (s_tx_head != s_tx_tail))
+    {
+        diag_tx_kick();
+    }
 }
 
 /**
- * @brief  Blocking UART log — sends message + CRLF on USART2
+ * @brief  DMA UART TX complete callback — called from DMA ISR
+ *
+ * Advances the tail pointer past the completed transfer.
+ * If more data is pending in the ring buffer, starts the next
+ * DMA transfer immediately.
+ */
+void App_Diagnostics_TxCpltCallback(void)
+{
+    s_tx_busy = 0U;
+
+    /* If more data queued, kick the next transfer */
+    if (s_tx_head != s_tx_tail)
+    {
+        diag_tx_kick();
+    }
+}
+
+/**
+ * @brief  Non-blocking UART log — enqueues message + CRLF into DMA TX buffer
  * @param  msg  Null-terminated string to transmit
  */
 void App_Diagnostics_Log(const char *msg)
@@ -96,10 +194,81 @@ void App_Diagnostics_Log(const char *msg)
 
     uint16_t len = (uint16_t)strlen(msg);
 
-    (void)HAL_UART_Transmit(&huart2, (const uint8_t *)msg, len,
-                            DIAG_UART_TX_TIMEOUT_MS);
-    (void)HAL_UART_Transmit(&huart2, (const uint8_t *)"\r\n", 2U,
-                            DIAG_UART_TX_TIMEOUT_MS);
+    if (len > 0U)
+    {
+        diag_tx_enqueue((const uint8_t *)msg, len);
+    }
+    diag_tx_enqueue((const uint8_t *)"\r\n", 2U);
+
+    /* Kick DMA if idle */
+    if (s_tx_busy == 0U)
+    {
+        diag_tx_kick();
+    }
+}
+
+/* ------------------------------------------------------------------ */
+/*  DMA TX ring buffer helpers                                         */
+/* ------------------------------------------------------------------ */
+
+/**
+ * @brief  Enqueue bytes into the TX ring buffer (does not start DMA)
+ * @param  data  Pointer to bytes
+ * @param  len   Number of bytes
+ *
+ * Drops data silently if the ring buffer is full. This is acceptable
+ * for diagnostic output — we never block the caller.
+ */
+static void diag_tx_enqueue(const uint8_t *data, uint16_t len)
+{
+    for (uint16_t i = 0U; i < len; i++)
+    {
+        uint16_t next = (s_tx_head + 1U) % DIAG_TX_BUF_SIZE;
+        if (next == s_tx_tail)
+        {
+            break;  /* Buffer full — drop remaining */
+        }
+        s_tx_buf[s_tx_head] = data[i];
+        s_tx_head = next;
+    }
+}
+
+/**
+ * @brief  Start a DMA transfer from the ring buffer
+ *
+ * Transfers a contiguous block from tail to either head or end-of-buffer
+ * (whichever comes first). The DMA complete callback will advance the tail
+ * and kick the next segment if data wraps around.
+ */
+static void diag_tx_kick(void)
+{
+    if (s_tx_head == s_tx_tail)
+    {
+        return;
+    }
+
+    uint16_t len;
+
+    if (s_tx_head > s_tx_tail)
+    {
+        len = s_tx_head - s_tx_tail;
+    }
+    else
+    {
+        /* Transfer up to end of buffer; next callback handles wrap */
+        len = DIAG_TX_BUF_SIZE - s_tx_tail;
+    }
+
+    s_tx_busy = 1U;
+
+    if (HAL_UART_Transmit_DMA(&huart2, &s_tx_buf[s_tx_tail], len) == HAL_OK)
+    {
+        s_tx_tail = (s_tx_tail + len) % DIAG_TX_BUF_SIZE;
+    }
+    else
+    {
+        s_tx_busy = 0U;  /* DMA start failed — retry on next poll */
+    }
 }
 
 /* ------------------------------------------------------------------ */
@@ -116,8 +285,8 @@ void App_Diagnostics_RxCallback(void)
 {
     uint8_t ch = s_rx_byte;
 
-    /* Echo character */
-    (void)HAL_UART_Transmit(&huart2, &ch, 1U, DIAG_UART_TX_TIMEOUT_MS);
+    /* Echo character (single byte, short timeout acceptable in ISR) */
+    (void)HAL_UART_Transmit(&huart2, &ch, 1U, DIAG_ECHO_TIMEOUT_MS);
 
     if ((ch == '\r') || (ch == '\n'))
     {
@@ -167,6 +336,10 @@ static void diag_process_command(char *cmd)
     {
         diag_cmd_pi("");
     }
+    else if (strncmp(cmd, "gain ", 5U) == 0)
+    {
+        diag_cmd_gain(cmd + 5U);
+    }
     else if (strcmp(cmd, "np") == 0)
     {
         diag_cmd_np();
@@ -190,7 +363,7 @@ static void diag_process_command(char *cmd)
     }
     else if (strlen(cmd) > 0U)
     {
-        diag_print("Unknown command. Try: pfc, pi, np, enable, status, fault, version");
+        diag_print("Unknown command. Try: pfc, pi, gain, np, enable, status, fault, version");
     }
 }
 
@@ -479,6 +652,21 @@ static void diag_cmd_pi(const char *args)
 }
 
 /* ------------------------------------------------------------------ */
+/*  Gain command (alias for 'pi set')                                   */
+/* ------------------------------------------------------------------ */
+
+/**
+ * @brief  'gain <loop> <kp> <ki>' — adjust PI gains at runtime
+ *
+ * Alias for 'pi set <loop> <kp> <ki>'. Accepts the same loop names:
+ * id, iq, vbus, vllc, illc.
+ */
+static void diag_cmd_gain(const char *args)
+{
+    diag_pi_set(args);
+}
+
+/* ------------------------------------------------------------------ */
 /*  NP balance command                                                  */
 /* ------------------------------------------------------------------ */
 
@@ -519,22 +707,82 @@ static void diag_cmd_status(void)
     diag_print(buf);
 }
 
+/**
+ * @brief  'fault' — dump fault log ring buffer
+ *
+ * Prints the active fault status (if any) followed by all entries in the
+ * fault log ring buffer, oldest first. Each entry shows timestamp, source
+ * name, severity, retry count, and context (Vbus, Iout at time of fault).
+ */
 static void diag_cmd_fault(void)
 {
-    char buf[80];
+    char buf[96];
 
-    if (App_Protection_IsFaultActive() == 0U)
+    /* Print active fault status */
+    if (App_Protection_IsFaultActive() != 0U)
     {
-        diag_print("No active faults");
+        const FaultStatus_t *fs = App_Protection_GetActiveFault();
+        const char *src_name = "UNKNOWN";
+        if ((uint8_t)fs->active_source < (uint8_t)FAULT_COUNT)
+        {
+            src_name = s_fault_names[fs->active_source];
+        }
+        (void)snprintf(buf, sizeof(buf), "ACTIVE: %s sev=%s latched=%u retries=%u",
+                       src_name,
+                       s_sev_names[fs->active_severity],
+                       (unsigned)fs->latched, (unsigned)fs->retry_count);
+        diag_print(buf);
+    }
+    else
+    {
+        diag_print("No active fault");
+    }
+
+    /* Dump ring buffer */
+    uint16_t count = App_Protection_GetLogCount();
+
+    if (count == 0U)
+    {
+        diag_print("Fault log empty");
         return;
     }
 
-    const FaultStatus_t *fs = App_Protection_GetActiveFault();
-
-    (void)snprintf(buf, sizeof(buf), "Fault: src=%u sev=%u latched=%u retries=%u",
-                   (unsigned)fs->active_source, (unsigned)fs->active_severity,
-                   (unsigned)fs->latched, (unsigned)fs->retry_count);
+    (void)snprintf(buf, sizeof(buf), "Fault log (%u entries):", (unsigned)count);
     diag_print(buf);
+
+    for (uint16_t i = 0U; i < count; i++)
+    {
+        const FaultLogEntry_t *entry = App_Protection_GetLogEntry(i);
+        if (entry == NULL)
+        {
+            break;
+        }
+
+        const char *src_name = "UNK";
+        if (entry->source < (uint8_t)FAULT_COUNT)
+        {
+            src_name = s_fault_names[entry->source];
+        }
+
+        const char *sev_name = "?";
+        if (entry->severity < 4U)
+        {
+            sev_name = s_sev_names[entry->severity];
+        }
+
+        uint16_t v_bus_x10 = (uint16_t)(entry->context >> 16);
+        uint16_t i_out_x10 = (uint16_t)(entry->context & 0xFFFFU);
+
+        (void)snprintf(buf, sizeof(buf),
+                       "  [%3u] %lu ms  %-14s %-5s  retry=%u  Vbus=%.1f Iout=%.1f",
+                       (unsigned)i,
+                       (unsigned long)entry->timestamp_ms,
+                       src_name, sev_name,
+                       (unsigned)entry->retry_count,
+                       (double)v_bus_x10 / 10.0,
+                       (double)i_out_x10 / 10.0);
+        diag_print(buf);
+    }
 }
 
 static void diag_cmd_version(void)

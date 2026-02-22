@@ -87,4 +87,19 @@ void App_Protection_FlashSync(void);
 /* Diagnostic clear — resets latched faults and retry counts */
 void App_Protection_DiagClear(void);
 
+/* Fault log entry (12 bytes, matches flash layout) */
+typedef struct
+{
+    uint32_t timestamp_ms;
+    uint8_t  source;
+    uint8_t  severity;
+    uint8_t  retry_count;
+    uint8_t  reserved;
+    uint32_t context;      /* v_bus×10 (upper 16) | i_out×10 (lower 16) */
+} FaultLogEntry_t;
+
+/* Fault log ring buffer accessors */
+uint16_t             App_Protection_GetLogCount(void);
+const FaultLogEntry_t *App_Protection_GetLogEntry(uint16_t index);
+
 #endif /* APP_PROTECTION_H */

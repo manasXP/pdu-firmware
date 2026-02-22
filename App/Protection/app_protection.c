@@ -48,16 +48,7 @@
 /*  Types                                                              */
 /* ------------------------------------------------------------------ */
 
-/* Fault log entry (12 bytes) */
-typedef struct
-{
-    uint32_t timestamp_ms;
-    uint8_t  source;
-    uint8_t  severity;
-    uint8_t  retry_count;
-    uint8_t  reserved;
-    uint32_t context;      /* v_bus×10 (upper 16) | i_out×10 (lower 16) */
-} FaultLogEntry_t;
+/* FaultLogEntry_t defined in app_protection.h */
 
 /* RAM shadow of flash fault log */
 typedef struct
@@ -595,4 +586,36 @@ float Thermal_Derate_Calc(const ADC_Readings_t *readings)
     }
 
     return result;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Fault log ring buffer accessors                                    */
+/* ------------------------------------------------------------------ */
+
+/**
+ * @brief  Return number of entries in the fault log ring buffer
+ */
+uint16_t App_Protection_GetLogCount(void)
+{
+    return s_log_ram.count;
+}
+
+/**
+ * @brief  Return pointer to a fault log entry by index (0 = oldest)
+ * @param  index  Entry index, 0 .. count-1
+ * @return Pointer to entry, or NULL if index out of range
+ */
+const FaultLogEntry_t *App_Protection_GetLogEntry(uint16_t index)
+{
+    if (index >= s_log_ram.count)
+    {
+        return NULL;
+    }
+
+    /* Ring buffer: oldest entry is at (write_idx - count) mod size */
+    uint16_t start = (uint16_t)((s_log_ram.write_idx
+                     + FAULT_LOG_SIZE - s_log_ram.count) % FAULT_LOG_SIZE);
+    uint16_t actual = (uint16_t)((start + index) % FAULT_LOG_SIZE);
+
+    return &s_log_ram.entries[actual];
 }
