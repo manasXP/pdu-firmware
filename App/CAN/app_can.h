@@ -17,12 +17,17 @@
 #define CAN_ID_DIAG_REQ          0x7E0
 #define CAN_ID_DIAG_RSP          0x7E8
 
+/* Diagnostic command IDs */
+#define CAN_DIAG_CMD_CLEAR_FAULTS 0x01U
+
 /* Watchdog thresholds */
 #define CAN_WATCHDOG_WARN_MS     50
 #define CAN_WATCHDOG_SHUTDOWN_MS 200
 
 void    App_CAN_Init(void);
 void    App_CAN_BroadcastState(uint8_t state);
+void    App_CAN_BroadcastFault(uint8_t fault_id, uint8_t severity);
+void    App_CAN_ProcessDiagRequest(void);
 void    App_CAN_Tick(void);
 uint8_t App_CAN_GetNodeID(void);
 

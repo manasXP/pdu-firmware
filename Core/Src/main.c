@@ -100,6 +100,8 @@ int main(void)
     while (1)
     {
         App_SM_Run();
+        App_Protection_FlashSync();
+        App_CAN_Tick();
         App_ADC_RegularProcess();
         App_Control_LLC_Sweep();
         App_Diagnostics_Poll();

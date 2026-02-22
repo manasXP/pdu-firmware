@@ -7,6 +7,7 @@
 #define APP_PROTECTION_H
 
 #include <stdint.h>
+#include "app_adc.h"
 
 /* Fault severity */
 typedef enum
@@ -49,6 +50,15 @@ typedef enum
     FAULT_COUNT
 } FaultSource_t;
 
+/* Fault status — tracks active fault state */
+typedef struct
+{
+    FaultSource_t   active_source;   /* Currently active fault (FAULT_COUNT = none) */
+    FaultSeverity_t active_severity; /* Severity of active fault */
+    uint8_t         latched;         /* 1 = latched (no auto-recovery) */
+    uint8_t         retry_count;     /* Retry attempts for active source */
+} FaultStatus_t;
+
 /**
  * @brief  Bitmask of pending hardware faults (set in HRTIM fault ISR).
  *
@@ -63,6 +73,18 @@ void  App_Protection_Init(void);
 void  App_Protection_FaultISR(void);
 void  Fault_Enter(FaultSource_t source);
 void  Fault_Clear(void);
-float Thermal_Derate_Calc(float t_hottest_deg_c);
+void  Fault_Recovery_Check(void);
+float Thermal_Derate_Calc(const ADC_Readings_t *readings);
+
+/* Fault status accessors */
+uint8_t              Fault_IsLatched(void);
+uint8_t              App_Protection_IsFaultActive(void);
+const FaultStatus_t *App_Protection_GetActiveFault(void);
+
+/* Flash persistence — call from main loop (NOT ISR) */
+void App_Protection_FlashSync(void);
+
+/* Diagnostic clear — resets latched faults and retry counts */
+void App_Protection_DiagClear(void);
 
 #endif /* APP_PROTECTION_H */

@@ -1,6 +1,6 @@
 /*
  * STM32G474RETx_FLASH.ld — Linker script for STM32G474RET6
- * Flash: 512 KB,  SRAM: 128 KB (96 KB SRAM1 + 32 KB SRAM2)
+ * Flash: 508 KB + 4 KB fault log,  SRAM: 128 KB (96 KB SRAM1 + 32 KB SRAM2)
  * CCM SRAM: 32 KB (mapped at 0x10000000)
  */
 
@@ -13,9 +13,10 @@ _Min_Stack_Size = 0x400;
 
 MEMORY
 {
-    RAM    (xrw) : ORIGIN = 0x20000000, LENGTH = 128K
-    FLASH  (rx)  : ORIGIN = 0x08000000, LENGTH = 512K
-    CCMRAM (xrw) : ORIGIN = 0x10000000, LENGTH = 32K
+    RAM      (xrw) : ORIGIN = 0x20000000, LENGTH = 128K
+    FLASH    (rx)  : ORIGIN = 0x08000000, LENGTH = 508K
+    FAULTLOG (r)   : ORIGIN = 0x0807F000, LENGTH = 4K
+    CCMRAM   (xrw) : ORIGIN = 0x10000000, LENGTH = 32K
 }
 
 SECTIONS
