@@ -74,6 +74,19 @@ typedef struct
 
 static Shutdown_t s_shutdown;
 
+/* Forward declaration — full struct definition in Burst Mode section below */
+typedef struct
+{
+    BurstState_t state;
+    uint32_t     entry_timer;
+    uint32_t     idle_tick;
+    float        v_target;
+    float        v_out_prev;
+    uint8_t      hrtim_configured;
+} BurstMode_t;
+
+static BurstMode_t s_burst;
+
 /* ------------------------------------------------------------------ */
 /*  Public API                                                         */
 /* ------------------------------------------------------------------ */
@@ -441,25 +454,6 @@ uint8_t Shutdown_Tick(void)
 /* ------------------------------------------------------------------ */
 /*  Burst Mode                                                         */
 /* ------------------------------------------------------------------ */
-
-/**
- * @brief  Burst mode internal state
- *
- * Sub-state machine: INACTIVE → RUN → IDLE → RUN (repeats) → INACTIVE
- * Entry: LLC switching frequency > BURST_ENTRY_FREQ_HZ sustained 50 ms
- * Exit:  LLC switching frequency < BURST_EXIT_FREQ_HZ (10 kHz hysteresis)
- */
-typedef struct
-{
-    BurstState_t state;
-    uint32_t     entry_timer;    /* ms counter for entry condition hold  */
-    uint32_t     idle_tick;      /* ms counter while in idle             */
-    float        v_target;       /* output voltage setpoint              */
-    float        v_out_prev;     /* previous V_out for dV/dt estimation  */
-    uint8_t      hrtim_configured; /* HRTIM burst registers initialized  */
-} BurstMode_t;
-
-static BurstMode_t s_burst;
 
 /**
  * @brief  Get current burst mode sub-state
