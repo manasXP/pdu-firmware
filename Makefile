@@ -38,10 +38,12 @@ C_INCLUDES = \
 -IApp/PowerSequence \
 -IApp/Diagnostics \
 -IDrivers/STM32G4xx_HAL_Driver/Inc \
+-IDrivers/STM32G4xx_HAL_Driver/Inc/Legacy \
 -IDrivers/CMSIS/Device/ST/STM32G4xx/Include \
 -IDrivers/CMSIS/Include
 
 ########## Source files ##########
+# Project sources (strict warnings)
 C_SOURCES = \
 $(wildcard Core/Src/*.c) \
 $(wildcard App/StateMachine/*.c) \
@@ -50,8 +52,14 @@ $(wildcard App/ADC/*.c) \
 $(wildcard App/Protection/*.c) \
 $(wildcard App/CAN/*.c) \
 $(wildcard App/PowerSequence/*.c) \
-$(wildcard App/Diagnostics/*.c) \
+$(wildcard App/Diagnostics/*.c)
+
+# Vendor sources (relaxed warnings)
+VENDOR_SOURCES = \
 $(wildcard Drivers/STM32G4xx_HAL_Driver/Src/*.c)
+
+# Combined
+C_SOURCES += $(VENDOR_SOURCES)
 
 ASM_SOURCES = \
 Core/Src/startup_stm32g474retx.s
@@ -91,8 +99,24 @@ vpath %.s $(sort $(dir $(ASM_SOURCES)))
 all: $(BUILD_DIR)/$(TARGET).elf $(BUILD_DIR)/$(TARGET).hex $(BUILD_DIR)/$(TARGET).bin
 	@$(SZ) $<
 
+# Vendor sources — suppress unused-parameter and other warnings from ST HAL
+VENDOR_CFLAGS = $(MCU) $(C_DEFS) $(C_INCLUDES) -Wall \
+-fdata-sections -ffunction-sections -std=c11 \
+-Wno-unused-parameter -Wno-shadow
+ifdef RELEASE
+VENDOR_CFLAGS += -O2 -DNDEBUG
+else
+VENDOR_CFLAGS += -Og -g3 -gdwarf-2
+endif
+VENDOR_CFLAGS += -MMD -MP -MF"$(@:%.o=%.d)"
+
+# Vendor object list for pattern matching
+VENDOR_OBJS = $(addprefix $(BUILD_DIR)/,$(notdir $(VENDOR_SOURCES:.c=.o)))
+
 $(BUILD_DIR)/%.o: %.c Makefile | $(BUILD_DIR)
-	$(CC) -c $(CFLAGS) $< -o $@
+	$(if $(filter $@,$(VENDOR_OBJS)),\
+	$(CC) -c $(VENDOR_CFLAGS) $< -o $@,\
+	$(CC) -c $(CFLAGS) $< -o $@)
 
 $(BUILD_DIR)/%.o: %.s Makefile | $(BUILD_DIR)
 	$(AS) -c $(ASFLAGS) $< -o $@

@@ -31,3 +31,6 @@ Thumbs.db
 # Lint / analysis output
 *.pclint
 cppcheck-results/
+
+# STM32CubeG4 driver cache (fetched by scripts/fetch_cube_drivers.sh)
+.cube_cache/

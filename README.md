@@ -5,9 +5,9 @@ Embedded firmware for a **30 kW Power Delivery Unit (PDU)** targeting the STM32G
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────┐
-│                   STM32G474RE                       │
-│                                                     │
+┌────────────────────────────────────────────────────┐
+│                   STM32G474RE                      │
+│                                                    │
 │  ┌──────────┐  ┌──────────┐  ┌──────────────────┐  │
 │  │  HRTIM   │  │ ADC 1-5  │  │   App State      │  │
 │  │ A,B,C →  │  │ Injected │  │   Machine        │  │
@@ -20,7 +20,7 @@ Embedded firmware for a **30 kW Power Delivery Unit (PDU)** targeting the STM32G
 │  │ sin/cos  │  │ 500 kbps │  │  24 fault sources│  │
 │  │ for PLL  │  │ stacking │  │  HW < 200 ns     │  │
 │  └──────────┘  └──────────┘  └──────────────────┘  │
-└─────────────────────────────────────────────────────┘
+└────────────────────────────────────────────────────┘
 ```
 
 ## Key Features
