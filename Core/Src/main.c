@@ -16,6 +16,7 @@
 #include "app_control.h"
 #include "app_powerseq.h"
 #include "app_diagnostics.h"
+#include "app_npbalance.h"
 #include "app_pll.h"
 #include "app_transforms.h"
 
@@ -92,6 +93,7 @@ int main(void)
     App_PLL_Init();
     App_Control_Init();
     App_PowerSeq_Init();
+    App_NPBalance_Init();
     App_Diagnostics_Init();
     App_SM_Init();
 

@@ -6,6 +6,7 @@
 #include "app_statemachine.h"
 #include "app_can.h"
 #include "app_control.h"
+#include "app_npbalance.h"
 #include "app_diagnostics.h"
 #include "app_pll.h"
 #include "app_powerseq.h"
@@ -442,10 +443,12 @@ void App_SM_Run(void)
         break;
 
     case STATE_RUN:
+        NP_Balance_Update();
         /* TODO: EP-03-006 — Normal operation — CC/CV charging */
         break;
 
     case STATE_DERATE:
+        NP_Balance_Update();
         /* TODO: EP-03-007 — Thermal or CAN derate active */
         break;
 

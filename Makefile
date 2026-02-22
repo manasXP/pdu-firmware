@@ -40,6 +40,7 @@ C_INCLUDES = \
 -IApp/CAN \
 -IApp/PowerSequence \
 -IApp/Diagnostics \
+-IApp/NPBalance \
 -IApp/PLL \
 -IApp/Transforms \
 -IDrivers/STM32G4xx_HAL_Driver/Inc \
@@ -58,6 +59,7 @@ $(wildcard App/Protection/*.c) \
 $(wildcard App/CAN/*.c) \
 $(wildcard App/PowerSequence/*.c) \
 $(wildcard App/Diagnostics/*.c) \
+$(wildcard App/NPBalance/*.c) \
 $(wildcard App/PLL/*.c) \
 $(wildcard App/Transforms/*.c)
 

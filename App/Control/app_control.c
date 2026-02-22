@@ -4,6 +4,7 @@
  */
 
 #include "app_control.h"
+#include "app_npbalance.h"
 #include "app_transforms.h"
 #include "app_protection.h"
 #include "app_pll.h"
@@ -519,6 +520,13 @@ void App_Control_PFC_ISR(void)
      *   AlphaBeta_t v_ab = Transforms_InversePark(v_dq, sc);
      *   DutyABC_t duties = Transforms_SVM(v_ab.alpha, v_ab.beta,
      *                                      adc->v_bus, PFC_MAX_DUTY);
+     *
+     *   // EP-03-013: Apply neutral-point zero-sequence offset
+     *   float np_offset = g_np_zs_offset;  // atomic 32-bit load
+     *   duties.a += np_offset;
+     *   duties.b += np_offset;
+     *   duties.c += np_offset;
+     *
      *   App_Control_PFC_SetDutyABC(duties.a, duties.b, duties.c);
      */
 }

@@ -10,6 +10,7 @@
  *   pi show                — Print all PI controller gains and Tt
  *   pi set <name> <Kp> <Ki> — Set PI gains (Tt auto-computed)
  *   pi step <name>         — Run offline step-response test (20 iterations)
+ *   np                     — Print neutral point error and duty offset
  *   enable                 — Request state machine enable (STANDBY → PLL_LOCK)
  *   status                 — Print state, Vbus, Iout, Vout, temperatures
  *   fault                  — Dump active fault info
@@ -19,6 +20,7 @@
 #include "app_diagnostics.h"
 #include "app_adc.h"
 #include "app_control.h"
+#include "app_npbalance.h"
 #include "app_protection.h"
 #include "app_statemachine.h"
 #include "main.h"
@@ -55,6 +57,7 @@ static uint8_t  s_rx_byte;
 static void diag_process_command(char *cmd);
 static void diag_cmd_pfc(const char *args);
 static void diag_cmd_pi(const char *args);
+static void diag_cmd_np(void);
 static void diag_cmd_status(void);
 static void diag_cmd_fault(void);
 static void diag_cmd_version(void);
@@ -164,6 +167,10 @@ static void diag_process_command(char *cmd)
     {
         diag_cmd_pi("");
     }
+    else if (strcmp(cmd, "np") == 0)
+    {
+        diag_cmd_np();
+    }
     else if (strcmp(cmd, "enable") == 0)
     {
         App_SM_RequestEnable();
@@ -183,7 +190,7 @@ static void diag_process_command(char *cmd)
     }
     else if (strlen(cmd) > 0U)
     {
-        diag_print("Unknown command. Try: pfc, pi, enable, status, fault, version");
+        diag_print("Unknown command. Try: pfc, pi, np, enable, status, fault, version");
     }
 }
 
@@ -469,6 +476,19 @@ static void diag_cmd_pi(const char *args)
     {
         diag_print("Usage: pi show | pi set <name> <Kp> <Ki> | pi step <name>");
     }
+}
+
+/* ------------------------------------------------------------------ */
+/*  NP balance command                                                  */
+/* ------------------------------------------------------------------ */
+
+static void diag_cmd_np(void)
+{
+    char buf[64];
+    (void)snprintf(buf, sizeof(buf), "V_NP_err=%.1f d_offset=%.3f",
+                   (double)NP_Balance_GetError(),
+                   (double)NP_Balance_GetOffset());
+    diag_print(buf);
 }
 
 /* ------------------------------------------------------------------ */
