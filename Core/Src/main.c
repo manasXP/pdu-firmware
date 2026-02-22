@@ -91,10 +91,14 @@ int main(void)
     App_Diagnostics_Init();
     App_SM_Init();
 
+    /* Start HRTIM-triggered injected conversions on all ADCs */
+    App_ADC_StartInjected();
+
     /* Main loop — state machine runs at 1 kHz via TIM6 flag */
     while (1)
     {
         App_SM_Run();
+        App_ADC_RegularProcess();
         App_Diagnostics_Poll();
     }
 }
@@ -214,6 +218,10 @@ static void MX_DMA_Init(void)
     /* DMA2 channel interrupts */
     HAL_NVIC_SetPriority(DMA2_Channel1_IRQn, NVIC_PRIO_DMA, 0);
     HAL_NVIC_EnableIRQ(DMA2_Channel1_IRQn);
+    HAL_NVIC_SetPriority(DMA2_Channel2_IRQn, NVIC_PRIO_DMA, 0);
+    HAL_NVIC_EnableIRQ(DMA2_Channel2_IRQn);
+    HAL_NVIC_SetPriority(DMA2_Channel3_IRQn, NVIC_PRIO_DMA, 0);
+    HAL_NVIC_EnableIRQ(DMA2_Channel3_IRQn);
 }
 
 /**

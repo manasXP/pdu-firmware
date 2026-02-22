@@ -13,6 +13,11 @@
 
 extern TIM_HandleTypeDef htim6;
 extern HRTIM_HandleTypeDef hhrtim1;
+extern DMA_HandleTypeDef hdma_adc1;
+extern DMA_HandleTypeDef hdma_adc2;
+extern DMA_HandleTypeDef hdma_adc3;
+extern DMA_HandleTypeDef hdma_adc4;
+extern DMA_HandleTypeDef hdma_adc5;
 
 /** @brief  Provided by App/StateMachine — sets 1 kHz tick flag */
 extern void App_SM_TickISR(void);
@@ -105,4 +110,33 @@ void TIM6_DAC_IRQHandler(void)
 void HRTIM1_FLT_IRQHandler(void)
 {
     HAL_HRTIM_IRQHandler(&hhrtim1, HRTIM_TIMERINDEX_COMMON);
+}
+
+/* ------------------------------------------------------------------ */
+/*  DMA Interrupts (ADC regular groups)                                */
+/* ------------------------------------------------------------------ */
+
+void DMA1_Channel1_IRQHandler(void)
+{
+    HAL_DMA_IRQHandler(&hdma_adc1);
+}
+
+void DMA1_Channel2_IRQHandler(void)
+{
+    HAL_DMA_IRQHandler(&hdma_adc2);
+}
+
+void DMA2_Channel1_IRQHandler(void)
+{
+    HAL_DMA_IRQHandler(&hdma_adc3);
+}
+
+void DMA2_Channel2_IRQHandler(void)
+{
+    HAL_DMA_IRQHandler(&hdma_adc4);
+}
+
+void DMA2_Channel3_IRQHandler(void)
+{
+    HAL_DMA_IRQHandler(&hdma_adc5);
 }

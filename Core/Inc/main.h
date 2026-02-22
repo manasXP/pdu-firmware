@@ -42,6 +42,38 @@ extern "C" {
 /* ------------------------------------------------------------------ */
 
 #define ADC_OVERSAMPLING_RATIO 16U
+#define ADC_VREF_MV            3300U     /* VREF+ millivolts            */
+#define ADC_FULL_SCALE         4095U     /* 12-bit ADC max code         */
+
+/*
+ * Per-signal scaling factors (placeholder — finalize at HW bring-up).
+ * Each converts a 12-bit ADC code to engineering units (V / A / degC).
+ * Formula: physical = (raw * ADC_VREF_MV / ADC_FULL_SCALE) * GAIN
+ *
+ * For bidirectional current sensors the zero-current offset is at
+ * mid-scale (2048 counts); subtract before applying gain.
+ */
+#define ADC_LSB_MV             (3300.0f / 4095.0f)  /* ~0.8059 mV/LSB */
+
+/* Voltage divider gains: physical_V = adc_V * (R_top + R_bot) / R_bot */
+#define ADC_GAIN_VBUS          326.7f    /* DC bus  ≤ 966 V             */
+#define ADC_GAIN_VGRID         220.0f    /* Grid    ≤ 530 Vpk           */
+#define ADC_GAIN_VOUT          340.0f    /* Output  ≤ 1050 V            */
+#define ADC_GAIN_VCAP          165.0f    /* Split-cap ≤ 500 V           */
+#define ADC_GAIN_VAUX12V       4.0f     /* 12 V aux rail                */
+
+/* Current sensor gains: physical_A = (adc - mid) * LSB * GAIN */
+#define ADC_GAIN_IPHASE        50.0f    /* PFC phase current (A/V)      */
+#define ADC_GAIN_IOUT          30.0f    /* LLC output current (A/V)     */
+
+/* Convenience macros — raw 12-bit code to physical unit */
+#define ADC_TO_VBUS(raw)   ((float)(raw) * ADC_LSB_MV * 0.001f * ADC_GAIN_VBUS)
+#define ADC_TO_VGRID(raw)  ((float)(raw) * ADC_LSB_MV * 0.001f * ADC_GAIN_VGRID)
+#define ADC_TO_VOUT(raw)   ((float)(raw) * ADC_LSB_MV * 0.001f * ADC_GAIN_VOUT)
+#define ADC_TO_VCAP(raw)   ((float)(raw) * ADC_LSB_MV * 0.001f * ADC_GAIN_VCAP)
+#define ADC_TO_VAUX12V(raw) ((float)(raw) * ADC_LSB_MV * 0.001f * ADC_GAIN_VAUX12V)
+#define ADC_TO_IPHASE(raw) (((float)(raw) - 2048.0f) * ADC_LSB_MV * 0.001f * ADC_GAIN_IPHASE)
+#define ADC_TO_IOUT(raw)   (((float)(raw) - 2048.0f) * ADC_LSB_MV * 0.001f * ADC_GAIN_IOUT)
 
 /* ------------------------------------------------------------------ */
 /*  Protection Thresholds                                              */
@@ -85,11 +117,19 @@ extern "C" {
 #define DEBUG_TICK_PORT        GPIOB
 #define DEBUG_TICK_PIN         GPIO_PIN_0
 
-/* HRTIM outputs — placeholder assignments (finalize from schematic) */
-#define HRTIM_PFC_A_PORT       GPIOA
-#define HRTIM_PFC_A_PIN        GPIO_PIN_8    /* HRTIM_CHA1 */
-#define HRTIM_PFC_B_PORT       GPIOA
-#define HRTIM_PFC_B_PIN        GPIO_PIN_9    /* HRTIM_CHA2 */
+/* HRTIM PFC outputs — Timer A (PA8/PA9), Timer B (PA10/PA11), Timer C (PB12/PB13) */
+#define HRTIM_PFC_A1_PORT      GPIOA
+#define HRTIM_PFC_A1_PIN       GPIO_PIN_8    /* HRTIM_CHA1 — Timer A output 1 */
+#define HRTIM_PFC_A2_PORT      GPIOA
+#define HRTIM_PFC_A2_PIN       GPIO_PIN_9    /* HRTIM_CHA2 — Timer A output 2 */
+#define HRTIM_PFC_B1_PORT      GPIOA
+#define HRTIM_PFC_B1_PIN       GPIO_PIN_10   /* HRTIM_CHB1 — Timer B output 1 */
+#define HRTIM_PFC_B2_PORT      GPIOA
+#define HRTIM_PFC_B2_PIN       GPIO_PIN_11   /* HRTIM_CHB2 — Timer B output 2 */
+#define HRTIM_PFC_C1_PORT      GPIOB
+#define HRTIM_PFC_C1_PIN       GPIO_PIN_12   /* HRTIM_CHC1 — Timer C output 1 */
+#define HRTIM_PFC_C2_PORT      GPIOB
+#define HRTIM_PFC_C2_PIN       GPIO_PIN_13   /* HRTIM_CHC2 — Timer C output 2 */
 
 /* Relay / contactor control — placeholders */
 #define RELAY_PFC_PORT         GPIOC
