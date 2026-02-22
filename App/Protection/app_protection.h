@@ -49,7 +49,18 @@ typedef enum
     FAULT_COUNT
 } FaultSource_t;
 
+/**
+ * @brief  Bitmask of pending hardware faults (set in HRTIM fault ISR).
+ *
+ * Bit positions match HRTIM_FAULT_x:
+ *   bit 0 = FLT1 (PFC OCP), bit 1 = FLT2 (LLC OCP),
+ *   bit 2 = FLT3 (bus OVP), bit 3 = FLT4 (output OVP),
+ *   bit 4 = FLT5 (ground fault).
+ */
+extern volatile uint32_t g_fault_pending;
+
 void  App_Protection_Init(void);
+void  App_Protection_FaultISR(void);
 void  Fault_Enter(FaultSource_t source);
 void  Fault_Clear(void);
 float Thermal_Derate_Calc(float t_hottest_deg_c);

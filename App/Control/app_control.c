@@ -201,7 +201,8 @@ static void pfc_timer_config(uint32_t timer_idx, uint32_t reset_src)
     TimerCfg.RepetitionUpdate     = HRTIM_UPDATEONREPETITION_ENABLED;
     TimerCfg.PushPull             = HRTIM_TIMPUSHPULLMODE_DISABLED;
     TimerCfg.FaultEnable          = HRTIM_TIMFAULTENABLE_FAULT1
-                                  | HRTIM_TIMFAULTENABLE_FAULT2;
+                                  | HRTIM_TIMFAULTENABLE_FAULT3
+                                  | HRTIM_TIMFAULTENABLE_FAULT5;
     TimerCfg.FaultLock            = HRTIM_TIMFAULTLOCK_READWRITE;
     TimerCfg.DeadTimeInsertion    = HRTIM_TIMDEADTIMEINSERTION_ENABLED;
     TimerCfg.DelayedProtectionMode = HRTIM_TIMER_A_B_C_DELAYEDPROTECTION_DISABLED;
@@ -545,8 +546,10 @@ void App_Control_HRTIM_LLC_Init(void)
     HRTIM_CompareCfgTypeDef  CompareCfg  = {0};
     HRTIM_ADCTriggerCfgTypeDef ADCTrigCfg = {0};
 
-    uint32_t llc_faults = HRTIM_TIMFAULTENABLE_FAULT3
-                        | HRTIM_TIMFAULTENABLE_FAULT4;
+    uint32_t llc_faults = HRTIM_TIMFAULTENABLE_FAULT2
+                        | HRTIM_TIMFAULTENABLE_FAULT3
+                        | HRTIM_TIMFAULTENABLE_FAULT4
+                        | HRTIM_TIMFAULTENABLE_FAULT5;
 
     /* ---- Timer D (LLC phase master) — free-running ---- */
     llc_timer_config(HRTIM_TIMERINDEX_TIMER_D,

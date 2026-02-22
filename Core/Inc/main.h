@@ -170,6 +170,18 @@ extern "C" {
 #define FDCAN1_TX_PORT         GPIOB
 #define FDCAN1_TX_PIN          GPIO_PIN_9    /* AF9 */
 
+/* HRTIM fault inputs — hardware OCP/OVP protection */
+#define HRTIM_FLT1_PORT        GPIOA
+#define HRTIM_FLT1_PIN         GPIO_PIN_12   /* PFC OCP, AF13 */
+#define HRTIM_FLT2_PORT        GPIOA
+#define HRTIM_FLT2_PIN         GPIO_PIN_15   /* LLC OCP, AF13 */
+#define HRTIM_FLT3_PORT        GPIOB
+#define HRTIM_FLT3_PIN         GPIO_PIN_10   /* DC bus OVP, AF13 */
+#define HRTIM_FLT4_PORT        GPIOB
+#define HRTIM_FLT4_PIN         GPIO_PIN_11   /* Output OVP, AF13 */
+#define HRTIM_FLT5_PORT        GPIOB
+#define HRTIM_FLT5_PIN         GPIO_PIN_2    /* Ground fault, AF13 */
+
 /* USART2 pins */
 #define USART2_TX_PORT         GPIOA
 #define USART2_TX_PIN          GPIO_PIN_2

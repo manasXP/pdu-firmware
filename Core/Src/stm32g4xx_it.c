@@ -25,6 +25,9 @@ extern void App_SM_TickISR(void);
 /** @brief  Provided by App/Control — PFC control loop at 65 kHz */
 extern void App_Control_PFC_ISR(void);
 
+/** @brief  Provided by App/Protection — HRTIM fault handler */
+extern void App_Protection_FaultISR(void);
+
 /* ------------------------------------------------------------------ */
 /*  Cortex-M4 System Exceptions                                        */
 /* ------------------------------------------------------------------ */
@@ -132,11 +135,12 @@ void HRTIM1_TIMD_IRQHandler(void)
  * @brief  HRTIM1 fault interrupt — hardware OCP/OVP
  *
  * Fault inputs disable HRTIM outputs in <200 ns via hardware.
- * This ISR is for software-side notification and logging.
+ * This ISR identifies which fault(s) fired, sets g_fault_pending,
+ * and logs the event. Direct register access for minimum latency.
  */
 void HRTIM1_FLT_IRQHandler(void)
 {
-    HAL_HRTIM_IRQHandler(&hhrtim1, HRTIM_TIMERINDEX_COMMON);
+    App_Protection_FaultISR();
 }
 
 /* ------------------------------------------------------------------ */

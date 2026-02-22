@@ -233,6 +233,23 @@ static void MX_GPIO_Init(void)
     GPIO_InitStruct.Alternate = GPIO_AF13_HRTIM1;
     HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
+    /* HRTIM fault inputs — FLT1 (PA12), FLT2 (PA15), AF13 */
+    GPIO_InitStruct.Pin   = HRTIM_FLT1_PIN | HRTIM_FLT2_PIN;
+    GPIO_InitStruct.Mode  = GPIO_MODE_AF_PP;
+    GPIO_InitStruct.Pull  = GPIO_PULLUP;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+    GPIO_InitStruct.Alternate = GPIO_AF13_HRTIM1;
+    HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+    /* HRTIM fault inputs — FLT3 (PB10), FLT4 (PB11), FLT5 (PB2), AF13 */
+    GPIO_InitStruct.Pin   = HRTIM_FLT3_PIN | HRTIM_FLT4_PIN
+                          | HRTIM_FLT5_PIN;
+    GPIO_InitStruct.Mode  = GPIO_MODE_AF_PP;
+    GPIO_InitStruct.Pull  = GPIO_PULLUP;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+    GPIO_InitStruct.Alternate = GPIO_AF13_HRTIM1;
+    HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
     /* FDCAN1 — PB8 (RX), PB9 (TX), AF9 */
     GPIO_InitStruct.Pin   = FDCAN1_RX_PIN | FDCAN1_TX_PIN;
     GPIO_InitStruct.Mode  = GPIO_MODE_AF_PP;
@@ -324,12 +341,20 @@ static void MX_HRTIM1_Init(void)
     HAL_HRTIM_FaultConfig(&hhrtim1, HRTIM_FAULT_2, &FaultCfg);
     HAL_HRTIM_FaultConfig(&hhrtim1, HRTIM_FAULT_3, &FaultCfg);
     HAL_HRTIM_FaultConfig(&hhrtim1, HRTIM_FAULT_4, &FaultCfg);
+    HAL_HRTIM_FaultConfig(&hhrtim1, HRTIM_FAULT_5, &FaultCfg);
 
-    /* Enable fault inputs */
+    /* Enable all 5 fault inputs */
     HAL_HRTIM_FaultModeCtl(&hhrtim1,
                            HRTIM_FAULT_1 | HRTIM_FAULT_2
-                         | HRTIM_FAULT_3 | HRTIM_FAULT_4,
+                         | HRTIM_FAULT_3 | HRTIM_FAULT_4
+                         | HRTIM_FAULT_5,
                            HRTIM_FAULTMODECTL_ENABLED);
+
+    /* Enable fault interrupt sources (FLT1–FLT5) */
+    __HAL_HRTIM_ENABLE_IT(&hhrtim1,
+                          HRTIM_IT_FLT1 | HRTIM_IT_FLT2
+                        | HRTIM_IT_FLT3 | HRTIM_IT_FLT4
+                        | HRTIM_IT_FLT5);
 
     /* HRTIM fault ISR — highest priority */
     HAL_NVIC_SetPriority(HRTIM1_FLT_IRQn, NVIC_PRIO_HRTIM_FLT, 0);
