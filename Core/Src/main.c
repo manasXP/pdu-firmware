@@ -206,6 +206,13 @@ static void MX_GPIO_Init(void)
     GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
     HAL_GPIO_Init(RELAY_PFC_PORT, &GPIO_InitStruct);
 
+    /* DIP switch inputs — PC10/PC11/PC12, active-low with internal pull-up */
+    GPIO_InitStruct.Pin   = DIP_SW0_PIN | DIP_SW1_PIN | DIP_SW2_PIN;
+    GPIO_InitStruct.Mode  = GPIO_MODE_INPUT;
+    GPIO_InitStruct.Pull  = GPIO_PULLUP;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+    HAL_GPIO_Init(DIP_SW_PORT, &GPIO_InitStruct);
+
     /* HRTIM PFC outputs — Timer A (PA8/PA9), Timer B (PA10/PA11) */
     GPIO_InitStruct.Pin   = HRTIM_PFC_A1_PIN | HRTIM_PFC_A2_PIN
                           | HRTIM_PFC_B1_PIN | HRTIM_PFC_B2_PIN;

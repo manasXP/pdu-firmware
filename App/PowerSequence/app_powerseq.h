@@ -22,7 +22,15 @@ uint8_t LLC_SoftStart_Tick(void);  /* Returns 1 when complete */
 void Shutdown_Begin(void);
 uint8_t Shutdown_Tick(void);       /* Returns 1 when complete */
 
-/* Burst mode */
-void Burst_Mode_Tick(void);
+/* Burst mode sub-state */
+typedef enum
+{
+    BURST_INACTIVE = 0,  /* Normal continuous operation    */
+    BURST_RUN      = 1,  /* Burst on — LLC switching       */
+    BURST_IDLE     = 2   /* Burst off — LLC outputs gated  */
+} BurstState_t;
+
+void         Burst_Mode_Tick(void);
+BurstState_t Burst_Mode_GetState(void);
 
 #endif /* APP_POWERSEQ_H */

@@ -34,6 +34,7 @@ extern void App_Diagnostics_RxCallback(void);
 /** @brief  Provided by App/Diagnostics — DMA TX complete callback */
 extern void App_Diagnostics_TxCpltCallback(void);
 
+extern FDCAN_HandleTypeDef hfdcan1;
 extern UART_HandleTypeDef huart2;
 extern DMA_HandleTypeDef  hdma_usart2_tx;
 
@@ -179,6 +180,18 @@ void DMA2_Channel2_IRQHandler(void)
 void DMA2_Channel3_IRQHandler(void)
 {
     HAL_DMA_IRQHandler(&hdma_adc5);
+}
+
+/* ------------------------------------------------------------------ */
+/*  FDCAN1 Interrupt                                                    */
+/* ------------------------------------------------------------------ */
+
+/**
+ * @brief  FDCAN1 interrupt line 0 — Rx FIFO 0 new message
+ */
+void FDCAN1_IT0_IRQHandler(void)
+{
+    HAL_FDCAN_IRQHandler(&hfdcan1);
 }
 
 /* ------------------------------------------------------------------ */

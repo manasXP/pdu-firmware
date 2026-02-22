@@ -1173,3 +1173,118 @@ const ZVS_Result_t *App_Control_LLC_GetZVSResult(void)
 {
     return &s_llc_sweep.zvs_result;
 }
+
+/* ------------------------------------------------------------------ */
+/*  LLC PI Integrator Freeze / Unfreeze (Burst Mode)                   */
+/* ------------------------------------------------------------------ */
+
+/** @brief  Freeze flag — when set, LLC ISR skips PI integrator updates */
+static volatile uint8_t s_llc_pi_frozen = 0U;
+
+/**
+ * @brief  Freeze LLC voltage and current PI integrators
+ *
+ * Called when entering BURST_IDLE. The integrator values are preserved
+ * so they resume from the same point when switching resumes.
+ */
+void App_Control_LLC_PI_Freeze(void)
+{
+    s_llc_pi_frozen = 1U;
+}
+
+/**
+ * @brief  Unfreeze LLC PI integrators
+ *
+ * Called when returning to BURST_RUN from BURST_IDLE.
+ */
+void App_Control_LLC_PI_Unfreeze(void)
+{
+    s_llc_pi_frozen = 0U;
+}
+
+/**
+ * @brief  Apply slow decay to LLC PI integrators during burst idle
+ * @param  factor  Multiplicative decay factor (e.g. 0.999 per ms)
+ *
+ * Prevents stale integrator windup if idle period is long.
+ */
+void App_Control_LLC_PI_DecayIdle(float factor)
+{
+    s_pi[PI_ID_VLLC].integrator *= factor;
+    s_pi[PI_ID_ILLC].integrator *= factor;
+}
+
+/* ------------------------------------------------------------------ */
+/*  HRTIM Burst Mode Controller                                        */
+/* ------------------------------------------------------------------ */
+
+/**
+ * @brief  Configure HRTIM burst mode controller registers
+ * @param  f_burst     Burst repetition frequency in Hz (e.g. 20000)
+ * @param  duty_burst  Burst on-duty ratio 0.0–1.0 (e.g. 0.30)
+ *
+ * Uses prescaled fHRTIM clock (170 MHz / 16 = 10.625 MHz).
+ * Single-shot mode with software trigger — firmware controls each burst cycle.
+ * Minimum on-time enforced to guarantee at least BURST_MIN_LLC_CYCLES
+ * LLC switching cycles per burst.
+ */
+void App_Control_HRTIM_BurstMode_Config(float f_burst, float duty_burst)
+{
+    HRTIM_BurstModeCfgTypeDef BurstCfg = {0};
+
+    /* Compute period and compare from burst clock frequency */
+    uint32_t bmper = (uint32_t)((float)BURST_HRTIM_CLK_HZ / f_burst);
+    uint32_t bmcmpr = (uint32_t)((float)bmper * duty_burst);
+
+    /* Enforce minimum on-time: at least BURST_MIN_LLC_CYCLES LLC periods */
+    uint32_t min_on_ticks = (BURST_HRTIM_CLK_HZ / LLC_FREQ_MAX_HZ)
+                          * BURST_MIN_LLC_CYCLES;
+    if (bmcmpr < min_on_ticks)
+    {
+        bmcmpr = min_on_ticks;
+    }
+
+    /* Clamp to 16-bit register range */
+    if (bmper > 0xFFFFU)
+    {
+        bmper = 0xFFFFU;
+    }
+    if (bmcmpr > bmper)
+    {
+        bmcmpr = bmper;
+    }
+
+    BurstCfg.Mode         = HRTIM_BURSTMODE_SINGLESHOT;
+    BurstCfg.ClockSource  = HRTIM_BURSTMODECLOCKSOURCE_FHRTIM;
+    BurstCfg.Prescaler    = HRTIM_BURSTMODEPRESCALER_DIV16;
+    BurstCfg.PreloadEnable = HRIM_BURSTMODEPRELOAD_ENABLED;
+    BurstCfg.Trigger      = HRTIM_BURSTMODETRIGGER_NONE;
+    BurstCfg.IdleDuration = bmper - bmcmpr;
+    BurstCfg.Period       = bmper;
+
+    HAL_HRTIM_BurstModeConfig(&hhrtim1, &BurstCfg);
+}
+
+/**
+ * @brief  Enable HRTIM burst mode controller
+ */
+void App_Control_HRTIM_BurstMode_Enable(void)
+{
+    HAL_HRTIM_BurstModeCtl(&hhrtim1, HRTIM_BURSTMODECTL_ENABLED);
+}
+
+/**
+ * @brief  Disable HRTIM burst mode controller
+ */
+void App_Control_HRTIM_BurstMode_Disable(void)
+{
+    HAL_HRTIM_BurstModeCtl(&hhrtim1, HRTIM_BURSTMODECTL_DISABLED);
+}
+
+/**
+ * @brief  Software-trigger one burst cycle
+ */
+void App_Control_HRTIM_BurstMode_SWTrigger(void)
+{
+    HAL_HRTIM_BurstModeSoftwareTrigger(&hhrtim1);
+}

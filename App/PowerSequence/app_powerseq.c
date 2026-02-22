@@ -83,6 +83,7 @@ void App_PowerSeq_Init(void)
     (void)memset(&s_pfc_ss, 0, sizeof(s_pfc_ss));
     (void)memset(&s_llc_ss, 0, sizeof(s_llc_ss));
     (void)memset(&s_shutdown, 0, sizeof(s_shutdown));
+    (void)memset(&s_burst, 0, sizeof(s_burst));
 }
 
 /* ------------------------------------------------------------------ */
@@ -438,10 +439,172 @@ uint8_t Shutdown_Tick(void)
 }
 
 /* ------------------------------------------------------------------ */
-/*  Burst Mode (placeholder)                                           */
+/*  Burst Mode                                                         */
 /* ------------------------------------------------------------------ */
 
+/**
+ * @brief  Burst mode internal state
+ *
+ * Sub-state machine: INACTIVE → RUN → IDLE → RUN (repeats) → INACTIVE
+ * Entry: LLC switching frequency > BURST_ENTRY_FREQ_HZ sustained 50 ms
+ * Exit:  LLC switching frequency < BURST_EXIT_FREQ_HZ (10 kHz hysteresis)
+ */
+typedef struct
+{
+    BurstState_t state;
+    uint32_t     entry_timer;    /* ms counter for entry condition hold  */
+    uint32_t     idle_tick;      /* ms counter while in idle             */
+    float        v_target;       /* output voltage setpoint              */
+    float        v_out_prev;     /* previous V_out for dV/dt estimation  */
+    uint8_t      hrtim_configured; /* HRTIM burst registers initialized  */
+} BurstMode_t;
+
+static BurstMode_t s_burst;
+
+/**
+ * @brief  Get current burst mode sub-state
+ * @return BURST_INACTIVE, BURST_RUN, or BURST_IDLE
+ */
+BurstState_t Burst_Mode_GetState(void)
+{
+    return s_burst.state;
+}
+
+/**
+ * @brief  Advance burst mode sub-state machine — call at 1 kHz from STATE_RUN
+ *
+ * Monitors LLC switching frequency demand to decide entry/exit.
+ * During BURST_RUN: checks V_out to transition to IDLE.
+ * During BURST_IDLE: monitors V_out and dV/dt for load detection.
+ * Freezes LLC PI integrators during idle with slow decay.
+ */
 void Burst_Mode_Tick(void)
 {
-    /* TODO: HRTIM burst controller, integrator freeze during idle */
+    const ADC_Readings_t *adc = App_ADC_GetReadings();
+    float v_out = adc->v_out;
+
+    /*
+     * Estimate current LLC frequency demand from the PI_VLLC output.
+     * The LLC voltage PI outputs a frequency setpoint in [100k, 300k] Hz.
+     */
+    const PI_Controller_t *pi_vllc = PI_GetController(PI_ID_VLLC);
+    float freq_demand = pi_vllc->Kp * pi_vllc->prev_error
+                      + pi_vllc->integrator;
+
+    /* Clamp to valid range for comparison */
+    if (freq_demand < (float)LLC_FREQ_MIN_HZ)
+    {
+        freq_demand = (float)LLC_FREQ_MIN_HZ;
+    }
+    if (freq_demand > (float)LLC_FREQ_MAX_HZ)
+    {
+        freq_demand = (float)LLC_FREQ_MAX_HZ;
+    }
+
+    switch (s_burst.state)
+    {
+    case BURST_INACTIVE:
+        /* Check entry condition: frequency > 280 kHz sustained for 50 ms */
+        if (freq_demand > (float)BURST_ENTRY_FREQ_HZ)
+        {
+            s_burst.entry_timer++;
+
+            if (s_burst.entry_timer >= BURST_ENTRY_TIME_MS)
+            {
+                /* Configure HRTIM burst mode on first entry */
+                if (s_burst.hrtim_configured == 0U)
+                {
+                    App_Control_HRTIM_BurstMode_Config(
+                        BURST_DEFAULT_FREQ_HZ, BURST_DEFAULT_DUTY);
+                    s_burst.hrtim_configured = 1U;
+                }
+
+                s_burst.v_target = (float)LLC_SOFTSTART_TARGET_V;
+                s_burst.v_out_prev = v_out;
+
+                /* Enable burst mode and trigger first cycle */
+                App_Control_HRTIM_BurstMode_Enable();
+                App_Control_HRTIM_BurstMode_SWTrigger();
+
+                s_burst.state = BURST_RUN;
+                s_burst.entry_timer = 0U;
+
+                App_Diagnostics_Log("[BM] Enter burst mode");
+            }
+        }
+        else
+        {
+            s_burst.entry_timer = 0U;
+        }
+        break;
+
+    case BURST_RUN:
+        /* Check exit condition: frequency demand dropped below hysteresis */
+        if (freq_demand < (float)BURST_EXIT_FREQ_HZ)
+        {
+            App_Control_HRTIM_BurstMode_Disable();
+            App_Control_LLC_PI_Unfreeze();
+            s_burst.state = BURST_INACTIVE;
+            App_Diagnostics_Log("[BM] Exit burst mode (freq)");
+            break;
+        }
+
+        /* RUN → IDLE: output voltage reached upper threshold */
+        if (v_out > (s_burst.v_target + BURST_VOUT_UPPER_V))
+        {
+            /* Freeze LLC PI integrators */
+            App_Control_LLC_PI_Freeze();
+            s_burst.idle_tick  = 0U;
+            s_burst.v_out_prev = v_out;
+            s_burst.state      = BURST_IDLE;
+        }
+        else
+        {
+            /* Re-trigger next burst cycle (single-shot mode) */
+            App_Control_HRTIM_BurstMode_SWTrigger();
+        }
+        break;
+
+    case BURST_IDLE:
+        s_burst.idle_tick++;
+
+        /* Slow integrator decay to prevent stale values */
+        App_Control_LLC_PI_DecayIdle(BURST_INTEGRATOR_DECAY);
+
+        /* Load detection: dV/dt estimation (dV per ms × C_out → current) */
+        float dv = s_burst.v_out_prev - v_out; /* positive = dropping */
+        s_burst.v_out_prev = v_out;
+
+        /* Emergency exit: large voltage drop */
+        if (v_out < (s_burst.v_target - BURST_VOUT_EMERGENCY_V))
+        {
+            App_Control_HRTIM_BurstMode_Disable();
+            App_Control_LLC_PI_Unfreeze();
+            s_burst.state = BURST_INACTIVE;
+            App_Diagnostics_Log("[BM] Emergency exit (Vdrop)");
+            break;
+        }
+
+        /* IDLE → RUN: output voltage dropped below lower threshold */
+        if (v_out < (s_burst.v_target - BURST_VOUT_LOWER_V))
+        {
+            App_Control_LLC_PI_Unfreeze();
+            App_Control_HRTIM_BurstMode_SWTrigger();
+            s_burst.state = BURST_RUN;
+            break;
+        }
+
+        /* Fast exit on load transient: dV > 2 V/ms indicates > 2 A step */
+        if (dv > 2.0f)
+        {
+            App_Control_LLC_PI_Unfreeze();
+            App_Control_HRTIM_BurstMode_SWTrigger();
+            s_burst.state = BURST_RUN;
+        }
+        break;
+
+    default:
+        s_burst.state = BURST_INACTIVE;
+        break;
+    }
 }

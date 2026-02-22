@@ -108,4 +108,15 @@ void    App_Control_LLC_ISR(void);
 /* ZVS boundary detection */
 const ZVS_Result_t *App_Control_LLC_GetZVSResult(void);
 
+/* LLC PI integrator freeze/unfreeze for burst mode idle */
+void App_Control_LLC_PI_Freeze(void);
+void App_Control_LLC_PI_Unfreeze(void);
+void App_Control_LLC_PI_DecayIdle(float factor);
+
+/* HRTIM burst mode controller configuration */
+void App_Control_HRTIM_BurstMode_Config(float f_burst, float duty_burst);
+void App_Control_HRTIM_BurstMode_Enable(void);
+void App_Control_HRTIM_BurstMode_Disable(void);
+void App_Control_HRTIM_BurstMode_SWTrigger(void);
+
 #endif /* APP_CONTROL_H */

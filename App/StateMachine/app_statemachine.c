@@ -444,6 +444,7 @@ void App_SM_Run(void)
 
     case STATE_RUN:
         NP_Balance_Update();
+        Burst_Mode_Tick();
         /* TODO: EP-03-006 — Normal operation — CC/CV charging */
         break;
 

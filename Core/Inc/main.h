@@ -125,6 +125,24 @@ extern "C" {
 #define LLC_SOFTSTART_TOLERANCE 0.05f   /* 5% window for contactor close */
 
 /* ------------------------------------------------------------------ */
+/*  Burst Mode Parameters                                              */
+/* ------------------------------------------------------------------ */
+
+#define BURST_ENTRY_FREQ_HZ     280000U   /* Enter burst when f_sw > 280 kHz for 50 ms */
+#define BURST_EXIT_FREQ_HZ      270000U   /* Exit burst when f_sw < 270 kHz (10 kHz hyst) */
+#define BURST_ENTRY_TIME_MS     50U       /* Sustained high-freq time before entry       */
+#define BURST_VOUT_UPPER_V      2.0f      /* RUN→IDLE: V_out > V_target + 2 V            */
+#define BURST_VOUT_LOWER_V      5.0f      /* IDLE→RUN: V_out < V_target − 5 V            */
+#define BURST_VOUT_EMERGENCY_V  10.0f     /* Immediate burst exit: V_out < V_target − 10 V*/
+#define BURST_DEFAULT_FREQ_HZ   20000.0f  /* Default burst repetition frequency (20 kHz) */
+#define BURST_DEFAULT_DUTY      0.30f     /* Default burst on-duty (30%)                 */
+#define BURST_INTEGRATOR_DECAY  0.999f    /* Slow integrator decay per ms during idle    */
+#define BURST_MIN_LLC_CYCLES    5U        /* Minimum LLC switching cycles per burst on   */
+
+/** @brief  HRTIM burst clock: fHRTIM / 16 = 170 MHz / 16 = 10.625 MHz */
+#define BURST_HRTIM_CLK_HZ      10625000U
+
+/* ------------------------------------------------------------------ */
 /*  NVIC Priorities                                                    */
 /* ------------------------------------------------------------------ */
 
@@ -209,6 +227,12 @@ extern "C" {
 #define USART2_TX_PIN          GPIO_PIN_2
 #define USART2_RX_PORT         GPIOA
 #define USART2_RX_PIN          GPIO_PIN_3
+
+/* DIP switch — node ID selection (active-low, internal pull-up) */
+#define DIP_SW_PORT            GPIOC
+#define DIP_SW0_PIN            GPIO_PIN_10
+#define DIP_SW1_PIN            GPIO_PIN_11
+#define DIP_SW2_PIN            GPIO_PIN_12
 
 /* ------------------------------------------------------------------ */
 /*  Peripheral Handle Externs                                          */
