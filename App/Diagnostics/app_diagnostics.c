@@ -7,6 +7,7 @@
  *   pfc stop               — Stop PFC outputs
  *   pfc duty <0-95>        — Set PFC duty cycle (percent)
  *   pfc status             — Print PFC switching parameters and bus voltage
+ *   pfc idref <amps>       — Set PFC I_d* reference for closed-loop testing
  *   pi show                — Print all PI controller gains and Tt
  *   pi set <name> <Kp> <Ki> — Set PI gains (Tt auto-computed)
  *   pi step <name>         — Run offline step-response test (20 iterations)
@@ -433,9 +434,26 @@ static void diag_cmd_pfc(const char *args)
                        (double)adc->v_grid_c);
         diag_print(buf);
     }
+    else if (strncmp(args, "idref ", 6U) == 0)
+    {
+        float id_ref = (float)atof(args + 6U);
+
+        if ((id_ref < -PFC_OCP_THRESHOLD_A) || (id_ref > PFC_OCP_THRESHOLD_A))
+        {
+            (void)snprintf(buf, sizeof(buf),
+                           "I_d* out of range (max %.0f A)",
+                           (double)PFC_OCP_THRESHOLD_A);
+            diag_print(buf);
+            return;
+        }
+        App_Control_PFC_SetIdRef(id_ref);
+        (void)snprintf(buf, sizeof(buf), "PFC I_d* set to %.2f A",
+                       (double)id_ref);
+        diag_print(buf);
+    }
     else
     {
-        diag_print("Usage: pfc start|stop|duty <0-95>|status");
+        diag_print("Usage: pfc start|stop|duty <0-95>|idref <amps>|status");
     }
 }
 

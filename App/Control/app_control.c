@@ -9,6 +9,7 @@
 #include "app_protection.h"
 #include "app_pll.h"
 #include "app_adc.h"
+#include "app_can.h"
 #include "app_diagnostics.h"
 #include "main.h"
 #include <math.h>
@@ -90,6 +91,15 @@ static LLC_Sweep_t s_llc_sweep;
 /* ------------------------------------------------------------------ */
 /*  PI Controller Instances                                             */
 /* ------------------------------------------------------------------ */
+
+/** @brief  Closed-loop PFC enable flag — set after soft-start completes */
+static volatile uint8_t s_pfc_closed_loop;
+
+/** @brief  I_d* setpoint in amps — set by voltage loop or soft-start ramp */
+static volatile float s_pfc_id_ref;
+
+/** @brief  Shared NP offset from neutral-point balancing module */
+extern volatile float g_np_zs_offset;
 
 /** @brief  PI controller array indexed by PI_Index_t */
 static PI_Controller_t s_pi[PI_ID_COUNT];
@@ -210,6 +220,154 @@ void PI_Reset(PI_Controller_t *pi)
 {
     pi->integrator = 0.0f;
     pi->prev_error = 0.0f;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Bus Voltage Outer Loop (EP-04-002)                                 */
+/* ------------------------------------------------------------------ */
+
+/** @brief  Voltage loop enable flag — gated by state machine */
+static volatile uint8_t s_vbus_loop_enabled = 0U;
+
+/** @brief  Main-loop time step for 1 kHz execution */
+#define VBUS_LOOP_DT  (1.0f / (float)MAIN_LOOP_FREQ_HZ)
+
+/**
+ * @brief  Run bus voltage PI controller at 1 kHz
+ *
+ * Reads V_bus from ADC, computes error vs. setpoint (from CAN command
+ * or default PFC_TARGET_VBUS_V), and outputs I_d* reference clamped
+ * to [0, PFC_SOFTSTART_ID_MAX].  The I_d* is consumed by the PFC
+ * inner current loop ISR via App_Control_VBus_GetIdRef().
+ *
+ * Anti-windup is handled by the PI_Update back-calculation scheme.
+ */
+void App_Control_VBus_Update(void)
+{
+    if (s_vbus_loop_enabled == 0U)
+    {
+        return;
+    }
+
+    const ADC_Readings_t *adc = App_ADC_GetReadings();
+
+    /* Determine setpoint: use CAN command if valid, else default */
+    const CAN_Command_t *cmd = App_CAN_GetCommand();
+    float v_setpoint;
+
+    if (cmd->valid != 0U)
+    {
+        /* CAN v_ref is in 0.1 V/LSB */
+        v_setpoint = (float)cmd->v_ref * 0.1f;
+
+        /* Clamp to safe operating range */
+        if (v_setpoint < 700.0f)
+        {
+            v_setpoint = 700.0f;
+        }
+        if (v_setpoint > (BUS_OVP_THRESHOLD_V - 50.0f))
+        {
+            v_setpoint = BUS_OVP_THRESHOLD_V - 50.0f;
+        }
+    }
+    else
+    {
+        v_setpoint = PFC_TARGET_VBUS_V;
+    }
+
+    /* Run PI: output is I_d* in amps */
+    float id_ref = PI_Update(&s_pi[PI_ID_VBUS], v_setpoint, adc->v_bus,
+                             VBUS_LOOP_DT);
+
+    /* Atomic 32-bit store — Cortex-M4 aligned float write is atomic */
+    s_pfc_id_ref = id_ref;
+}
+
+/**
+ * @brief  Enable the bus voltage outer loop
+ *
+ * Called when entering RUN state after soft-start completes.
+ * The integrator should be pre-loaded before enabling for
+ * bumpless transfer from open-loop soft-start.
+ */
+void App_Control_VBus_Enable(void)
+{
+    s_vbus_loop_enabled = 1U;
+}
+
+/**
+ * @brief  Disable the bus voltage outer loop and zero the I_d* reference
+ *
+ * Called on FAULT, SHUTDOWN, or any state that disables PFC outputs.
+ * Resets the PI integrator to prevent windup.
+ */
+void App_Control_VBus_Disable(void)
+{
+    s_vbus_loop_enabled = 0U;
+    s_pfc_id_ref = 0.0f;
+    PI_Reset(&s_pi[PI_ID_VBUS]);
+}
+
+/**
+ * @brief  Get current I_d* reference from bus voltage loop
+ * @return I_d* in amps (0 when loop is disabled)
+ *
+ * Called from PFC ISR (65 kHz) — single aligned float read is
+ * atomic on Cortex-M4, no lock needed.
+ */
+float App_Control_VBus_GetIdRef(void)
+{
+    return s_pfc_id_ref;
+}
+
+/**
+ * @brief  Pre-load bus voltage PI integrator for bumpless transfer
+ * @param  value  Integrator pre-load value (typically the steady-state
+ *                I_d* expected at the current bus voltage)
+ *
+ * Called just before enabling the loop when transitioning from
+ * open-loop soft-start to closed-loop RUN.  Prevents a step change
+ * in I_d* that would cause a voltage transient.
+ */
+void App_Control_VBus_PreloadIntegrator(float value)
+{
+    s_pi[PI_ID_VBUS].integrator = value;
+    s_pi[PI_ID_VBUS].prev_error = 0.0f;
+    s_pfc_id_ref = value;
+}
+
+/* ------------------------------------------------------------------ */
+/*  PFC Closed-Loop Current Control API                                */
+/* ------------------------------------------------------------------ */
+
+/**
+ * @brief  Set I_d* reference for PFC current loop
+ * @param  id_ref_a  Desired d-axis current in amps
+ */
+void App_Control_PFC_SetIdRef(float id_ref_a)
+{
+    s_pfc_id_ref = id_ref_a;
+}
+
+/**
+ * @brief  Enable closed-loop PFC current control
+ *
+ * Resets PI_ID and PI_IQ integrators for bumpless transfer,
+ * then sets the closed-loop enable flag read by the ISR.
+ */
+void App_Control_PFC_EnableClosedLoop(void)
+{
+    PI_Reset(&s_pi[PI_ID_ID]);
+    PI_Reset(&s_pi[PI_ID_IQ]);
+    s_pfc_closed_loop = 1U;
+}
+
+/**
+ * @brief  Disable closed-loop PFC current control
+ */
+void App_Control_PFC_DisableClosedLoop(void)
+{
+    s_pfc_closed_loop = 0U;
 }
 
 /* ------------------------------------------------------------------ */
@@ -408,6 +566,11 @@ void App_Control_PFC_Start(void)
  */
 void App_Control_PFC_Stop(void)
 {
+    /* Disable closed-loop and reset PI integrators */
+    s_pfc_closed_loop = 0U;
+    PI_Reset(&s_pi[PI_ID_ID]);
+    PI_Reset(&s_pi[PI_ID_IQ]);
+
     /* Disable outputs first for safe shutdown */
     HAL_HRTIM_WaveformOutputStop(&hhrtim1,
                                   HRTIM_OUTPUT_TA1 | HRTIM_OUTPUT_TA2
@@ -509,26 +672,47 @@ void App_Control_PFC_ISR(void)
 
     /* Park transform to dq frame */
     DQ_t i_dq = Transforms_Park(i_ab, sc);
-    (void)i_dq; /* TODO (EP-04-001): PI control on i_d, i_q */
 
-    /* Update PLL with pre-computed sin/cos */
+    /* Update PLL with pre-computed sin/cos (always runs for lock detect) */
     App_PLL_UpdateEx(adc->v_grid_a, adc->v_grid_b, dt, sc);
 
-    /*
-     * TODO (EP-04-001): Inverse Park on PI outputs → SVM → SetDutyABC
-     *   DQ_t v_dq = { .d = pi_d_out, .q = pi_q_out };
-     *   AlphaBeta_t v_ab = Transforms_InversePark(v_dq, sc);
-     *   DutyABC_t duties = Transforms_SVM(v_ab.alpha, v_ab.beta,
-     *                                      adc->v_bus, PFC_MAX_DUTY);
-     *
-     *   // EP-03-013: Apply neutral-point zero-sequence offset
-     *   float np_offset = g_np_zs_offset;  // atomic 32-bit load
-     *   duties.a += np_offset;
-     *   duties.b += np_offset;
-     *   duties.c += np_offset;
-     *
-     *   App_Control_PFC_SetDutyABC(duties.a, duties.b, duties.c);
-     */
+    /* Closed-loop current control — skip if not yet enabled */
+    if (s_pfc_closed_loop == 0U)
+    {
+        return;
+    }
+
+    /* Read I_d* reference (from VBus outer loop or CLI override) */
+    float id_ref = s_pfc_id_ref;
+
+    /* d/q PI controllers */
+    float v_d_pi = PI_Update(&s_pi[PI_ID_ID], id_ref, i_dq.d, dt);
+    float v_q_pi = PI_Update(&s_pi[PI_ID_IQ], 0.0f, i_dq.q, dt);
+
+    /* Decoupling feedforward: V_d* = V_d_PI - ω·L·I_q
+     *                         V_q* = V_q_PI + ω·L·I_d   */
+    float omega = App_PLL_GetOmega();
+    float wL = omega * PFC_L_HENRY;
+
+    DQ_t v_dq;
+    v_dq.d = v_d_pi - wL * i_dq.q;
+    v_dq.q = v_q_pi + wL * i_dq.d;
+
+    /* Inverse Park → alpha-beta voltage commands */
+    AlphaBeta_t v_ab = Transforms_InversePark(v_dq, sc);
+
+    /* SVM → per-phase duty cycles */
+    DutyABC_t duties = Transforms_SVM(v_ab.alpha, v_ab.beta,
+                                       adc->v_bus, PFC_MAX_DUTY);
+
+    /* Neutral-point zero-sequence offset (EP-03-013) */
+    float np_offset = g_np_zs_offset;
+    duties.a += np_offset;
+    duties.b += np_offset;
+    duties.c += np_offset;
+
+    /* Write to HRTIM compare registers */
+    App_Control_PFC_SetDutyABC(duties.a, duties.b, duties.c);
 }
 
 void App_Control_LLC_ISR(void)

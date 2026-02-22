@@ -102,6 +102,7 @@ extern "C" {
 #define PFC_SOFTSTART_DUTY_INIT 0.05f  /* Initial duty on ramp start       */
 #define PFC_NTC_BYPASS_VBUS_FRAC 0.80f /* NTC bypass at 80% of target Vbus */
 #define PFC_TARGET_VBUS_V      800.0f  /* Target DC bus voltage (V)        */
+#define PFC_L_HENRY            200e-6f /* Boost inductor per phase (H)     */
 
 /* ------------------------------------------------------------------ */
 /*  Shutdown Parameters                                                */

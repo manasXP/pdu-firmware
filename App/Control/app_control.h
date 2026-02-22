@@ -85,6 +85,13 @@ const PI_Controller_t *PI_GetController(PI_Index_t idx);
  */
 const char *PI_GetName(PI_Index_t idx);
 
+/* Bus voltage outer loop (1 kHz, called from state machine) */
+void  App_Control_VBus_Update(void);
+void  App_Control_VBus_Enable(void);
+void  App_Control_VBus_Disable(void);
+float App_Control_VBus_GetIdRef(void);
+void  App_Control_VBus_PreloadIntegrator(float value);
+
 /* PFC HRTIM configuration and control */
 void App_Control_HRTIM_PFC_Init(void);
 void App_Control_PFC_Start(void);
@@ -92,6 +99,11 @@ void App_Control_PFC_Stop(void);
 void App_Control_PFC_SetDuty(float duty);
 void App_Control_PFC_SetDutyABC(float da, float db, float dc);
 void App_Control_PFC_ISR(void);
+
+/* PFC closed-loop current control */
+void  App_Control_PFC_SetIdRef(float id_ref_a);
+void  App_Control_PFC_EnableClosedLoop(void);
+void  App_Control_PFC_DisableClosedLoop(void);
 
 /* LLC HRTIM configuration and control */
 void    App_Control_HRTIM_LLC_Init(void);

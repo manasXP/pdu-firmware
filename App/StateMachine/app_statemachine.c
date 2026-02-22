@@ -254,6 +254,30 @@ static void state_soft_start_llc(void)
     {
         /* ZVS results already logged by sweep completion handler */
         (void)App_Control_LLC_GetZVSResult();
+
+        /*
+         * Enable bus voltage outer loop with bumpless transfer:
+         * Pre-load integrator with estimated steady-state I_d* so
+         * the first PI output matches the open-loop operating point.
+         * At rated conditions: P = V_bus * I_d, so I_d ≈ P / V_bus.
+         * Use a conservative fraction of rated current for smooth handoff.
+         */
+        const ADC_Readings_t *adc = App_ADC_GetReadings();
+        float preload = 0.0f;
+
+        if (adc->v_bus > 100.0f)
+        {
+            /* Estimate I_d* from current bus voltage vs target */
+            preload = PFC_SOFTSTART_ID_MAX * (adc->v_bus / PFC_TARGET_VBUS_V);
+            if (preload > PFC_SOFTSTART_ID_MAX)
+            {
+                preload = PFC_SOFTSTART_ID_MAX;
+            }
+        }
+
+        App_Control_VBus_PreloadIntegrator(preload);
+        App_Control_VBus_Enable();
+
         App_Diagnostics_Log("[SM] LLC soft-start complete");
         State_Transition(STATE_RUN);
         return;
@@ -284,6 +308,9 @@ static void state_run(void)
     /* LED steady ON — normal operation */
     HAL_GPIO_WritePin(DEBUG_LED_PORT, DEBUG_LED_PIN, GPIO_PIN_SET);
 
+    /* Bus voltage outer loop — produces I_d* for PFC current control */
+    App_Control_VBus_Update();
+
     /* Neutral point balancing and burst mode sub-state */
     NP_Balance_Update();
     Burst_Mode_Tick();
@@ -291,6 +318,7 @@ static void state_run(void)
     /* Check for active fault (HW comparator or SW) → FAULT */
     if (App_Protection_IsFaultActive() != 0U)
     {
+        App_Control_VBus_Disable();
         App_Control_LLC_Stop();
         App_Control_PFC_Stop();
         State_Transition(STATE_FAULT);
@@ -348,12 +376,16 @@ static void state_derate(void)
         HAL_GPIO_WritePin(DEBUG_LED_PORT, DEBUG_LED_PIN, GPIO_PIN_RESET);
     }
 
+    /* Bus voltage outer loop continues during derate */
+    App_Control_VBus_Update();
+
     /* Neutral point balancing continues during derate */
     NP_Balance_Update();
 
     /* Check for active fault → FAULT */
     if (App_Protection_IsFaultActive() != 0U)
     {
+        App_Control_VBus_Disable();
         App_Control_LLC_Stop();
         App_Control_PFC_Stop();
         State_Transition(STATE_FAULT);
@@ -365,9 +397,11 @@ static void state_derate(void)
     float derate = Thermal_Derate_Calc(adc);
 
     /*
-     * TODO: Apply derate factor to control setpoints (EP-04-001)
-     *   i_ref_eff = i_ref * derate;
-     *   Update LLC PI setpoint via App_Control_LLC_SetCurrentRef()
+     * TODO (EP-04-001): Apply derate factor to inner current loop
+     *   The voltage loop output (I_d*) is already clamped by the PI
+     *   output limits.  Once the inner current loop is closed, scale
+     *   the PI_ID_VBUS output limit by derate to reduce power:
+     *   s_pi[PI_ID_VBUS].out_max = PFC_SOFTSTART_ID_MAX * derate;
      */
 
     /* Derate cleared — all thermal zones recovered (with hysteresis) and
@@ -452,6 +486,7 @@ static void state_shutdown(void)
     /* First tick after entry — begin shutdown sequence */
     if (elapsed == 0U)
     {
+        App_Control_VBus_Disable();
         Shutdown_Begin();
     }
 

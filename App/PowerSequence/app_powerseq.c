@@ -195,6 +195,10 @@ uint8_t PFC_SoftStart_Tick(void)
     /* Complete when ramp is finished */
     if (s_pfc_ss.tick_count >= PFC_SOFTSTART_RAMP_MS)
     {
+        /* Handoff from open-loop duty ramp to closed-loop current control */
+        App_Control_PFC_SetIdRef(0.0f);
+        App_Control_PFC_EnableClosedLoop();
+
         s_pfc_ss.complete = 1U;
 
         char buf[48];
