@@ -8,6 +8,17 @@
 
 #include <stdint.h>
 
+/* PI controller instance index */
+typedef enum
+{
+    PI_ID_ID = 0,   /* PFC d-axis current */
+    PI_ID_IQ,       /* PFC q-axis current */
+    PI_ID_VBUS,     /* PFC bus voltage outer loop */
+    PI_ID_VLLC,     /* LLC output voltage */
+    PI_ID_ILLC,     /* LLC output current */
+    PI_ID_COUNT
+} PI_Index_t;
+
 /* LLC sweep mode — selects which phase(s) to drive */
 typedef enum
 {
@@ -49,11 +60,37 @@ void  App_Control_Init(void);
 float PI_Update(PI_Controller_t *pi, float setpoint, float measurement, float dt);
 void  PI_Reset(PI_Controller_t *pi);
 
+/**
+ * @brief  Set PI gains at runtime; auto-computes Tt = sqrt(Kp / Ki)
+ * @param  idx      Controller index (PI_ID_ID .. PI_ID_ILLC)
+ * @param  Kp       Proportional gain (must be > 0)
+ * @param  Ki       Integral gain (must be > 0)
+ * @param  out_min  Output saturation minimum
+ * @param  out_max  Output saturation maximum
+ */
+void PI_SetGains(PI_Index_t idx, float Kp, float Ki,
+                 float out_min, float out_max);
+
+/**
+ * @brief  Get read-only pointer to a PI controller instance
+ * @param  idx  Controller index
+ * @return Pointer to controller, or NULL if idx is out of range
+ */
+const PI_Controller_t *PI_GetController(PI_Index_t idx);
+
+/**
+ * @brief  Get human-readable name for a PI controller index
+ * @param  idx  Controller index
+ * @return Static string name (e.g. "id", "iq", "vbus", "vllc", "illc")
+ */
+const char *PI_GetName(PI_Index_t idx);
+
 /* PFC HRTIM configuration and control */
 void App_Control_HRTIM_PFC_Init(void);
 void App_Control_PFC_Start(void);
 void App_Control_PFC_Stop(void);
 void App_Control_PFC_SetDuty(float duty);
+void App_Control_PFC_SetDutyABC(float da, float db, float dc);
 void App_Control_PFC_ISR(void);
 
 /* LLC HRTIM configuration and control */

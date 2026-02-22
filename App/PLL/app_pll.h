@@ -15,6 +15,7 @@ extern "C" {
 #endif
 
 #include <stdint.h>
+#include "app_transforms.h"
 
 /* ------------------------------------------------------------------ */
 /*  PLL Configuration Constants                                        */
@@ -52,6 +53,15 @@ void App_PLL_Init(void);
  * @param  dt   Time step (s), typically 1/65000
  */
 void App_PLL_Update(float v_a, float v_b, float dt);
+
+/**
+ * @brief  Run one PLL iteration with pre-computed sin/cos
+ * @param  v_a  Grid voltage phase A (V)
+ * @param  v_b  Grid voltage phase B (V)
+ * @param  dt   Time step (s)
+ * @param  sc   Pre-computed sin/cos from CORDIC
+ */
+void App_PLL_UpdateEx(float v_a, float v_b, float dt, SinCos_t sc);
 
 /**
  * @brief  Check if PLL has achieved lock

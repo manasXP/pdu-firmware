@@ -17,6 +17,7 @@
 #include "app_powerseq.h"
 #include "app_diagnostics.h"
 #include "app_pll.h"
+#include "app_transforms.h"
 
 /* ------------------------------------------------------------------ */
 /*  Peripheral Handles (file-scope)                                    */
@@ -84,6 +85,7 @@ int main(void)
     MX_FMAC_Init();
 
     /* Application init */
+    App_Transforms_Init();
     App_ADC_Init();
     App_Protection_Init();
     App_CAN_Init();
@@ -195,7 +197,8 @@ static void MX_GPIO_Init(void)
     /* Relay/contactor outputs — start OFF (safe state) */
     HAL_GPIO_WritePin(RELAY_PFC_PORT, RELAY_PFC_PIN, GPIO_PIN_RESET);
     HAL_GPIO_WritePin(RELAY_LLC_PORT, RELAY_LLC_PIN, GPIO_PIN_RESET);
-    GPIO_InitStruct.Pin   = RELAY_PFC_PIN | RELAY_LLC_PIN;
+    HAL_GPIO_WritePin(RELAY_NTC_PORT, RELAY_NTC_PIN, GPIO_PIN_RESET);
+    GPIO_InitStruct.Pin   = RELAY_PFC_PIN | RELAY_LLC_PIN | RELAY_NTC_PIN;
     GPIO_InitStruct.Mode  = GPIO_MODE_OUTPUT_PP;
     GPIO_InitStruct.Pull  = GPIO_NOPULL;
     GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;

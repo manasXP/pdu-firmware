@@ -41,6 +41,7 @@ C_INCLUDES = \
 -IApp/PowerSequence \
 -IApp/Diagnostics \
 -IApp/PLL \
+-IApp/Transforms \
 -IDrivers/STM32G4xx_HAL_Driver/Inc \
 -IDrivers/STM32G4xx_HAL_Driver/Inc/Legacy \
 -IDrivers/CMSIS/Device/ST/STM32G4xx/Include \
@@ -57,7 +58,8 @@ $(wildcard App/Protection/*.c) \
 $(wildcard App/CAN/*.c) \
 $(wildcard App/PowerSequence/*.c) \
 $(wildcard App/Diagnostics/*.c) \
-$(wildcard App/PLL/*.c)
+$(wildcard App/PLL/*.c) \
+$(wildcard App/Transforms/*.c)
 
 # Vendor sources (relaxed warnings)
 VENDOR_SOURCES = \

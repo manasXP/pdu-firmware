@@ -4,6 +4,7 @@
  */
 
 #include "app_control.h"
+#include "app_transforms.h"
 #include "app_protection.h"
 #include "app_pll.h"
 #include "app_adc.h"
@@ -85,43 +86,83 @@ typedef struct
 
 static LLC_Sweep_t s_llc_sweep;
 
-/* PI controller instances */
-static PI_Controller_t s_pi_id;    /* PFC d-axis current */
-static PI_Controller_t s_pi_iq;    /* PFC q-axis current */
-static PI_Controller_t s_pi_vbus;  /* PFC bus voltage outer loop */
-static PI_Controller_t s_pi_vllc;  /* LLC output voltage */
-static PI_Controller_t s_pi_illc;  /* LLC output current */
+/* ------------------------------------------------------------------ */
+/*  PI Controller Instances                                             */
+/* ------------------------------------------------------------------ */
+
+/** @brief  PI controller array indexed by PI_Index_t */
+static PI_Controller_t s_pi[PI_ID_COUNT];
+
+/** @brief  Human-readable names for CLI/diagnostics */
+static const char *const s_pi_names[PI_ID_COUNT] = {
+    "id", "iq", "vbus", "vllc", "illc"
+};
+
+/**
+ * @brief  Compute anti-windup tracking time constant
+ *
+ * Tt = sqrt(Kp / Ki) — geometric mean of proportional and integral
+ * time constants.  For Kp/Ki <= 0, falls back to a safe default.
+ */
+static float pi_compute_tt(float Kp, float Ki)
+{
+    if ((Kp <= 0.0f) || (Ki <= 0.0f))
+    {
+        return 0.01f; /* Safe fallback */
+    }
+    return sqrtf(Kp / Ki);
+}
+
+void PI_SetGains(PI_Index_t idx, float Kp, float Ki,
+                 float out_min, float out_max)
+{
+    if (idx >= PI_ID_COUNT)
+    {
+        return;
+    }
+
+    PI_Controller_t *pi = &s_pi[idx];
+    pi->Kp      = Kp;
+    pi->Ki      = Ki;
+    pi->Tt      = pi_compute_tt(Kp, Ki);
+    pi->out_min = out_min;
+    pi->out_max = out_max;
+    pi->integrator = 0.0f;
+    pi->prev_error = 0.0f;
+}
+
+const PI_Controller_t *PI_GetController(PI_Index_t idx)
+{
+    if (idx >= PI_ID_COUNT)
+    {
+        return NULL;
+    }
+    return &s_pi[idx];
+}
+
+const char *PI_GetName(PI_Index_t idx)
+{
+    if (idx >= PI_ID_COUNT)
+    {
+        return "?";
+    }
+    return s_pi_names[idx];
+}
 
 void App_Control_Init(void)
 {
-    /* PFC current loop: BW ~1.5 kHz, L=200 uH */
-    s_pi_id = (PI_Controller_t){
-        .Kp = 0.94f, .Ki = 1776.0f, .Tt = 0.001f,
-        .out_min = -1.0f, .out_max = 1.0f,
-        .integrator = 0.0f, .prev_error = 0.0f
-    };
-    s_pi_iq = s_pi_id;
+    /* PFC current loop: BW ~1.5 kHz, L=200 uH, Tt = sqrt(0.94/1776) ≈ 0.023 */
+    PI_SetGains(PI_ID_ID, 0.94f, 1776.0f, -1.0f, 1.0f);
+    PI_SetGains(PI_ID_IQ, 0.94f, 1776.0f, -1.0f, 1.0f);
 
-    /* Bus voltage loop: BW ~30 Hz */
-    s_pi_vbus = (PI_Controller_t){
-        .Kp = 0.1f, .Ki = 10.0f, .Tt = 0.01f,
-        .out_min = 0.0f, .out_max = 60.0f,
-        .integrator = 0.0f, .prev_error = 0.0f
-    };
+    /* Bus voltage loop: BW ~30 Hz, Tt = sqrt(0.1/10) = 0.1 */
+    PI_SetGains(PI_ID_VBUS, 0.1f, 10.0f, 0.0f, 60.0f);
 
-    /* LLC voltage loop */
-    s_pi_vllc = (PI_Controller_t){
-        .Kp = 0.005f, .Ki = 5.0f, .Tt = 0.01f,
-        .out_min = 100000.0f, .out_max = 300000.0f,
-        .integrator = 0.0f, .prev_error = 0.0f
-    };
+    /* LLC voltage loop: Tt = sqrt(0.005/5) ≈ 0.032 */
+    PI_SetGains(PI_ID_VLLC, 0.005f, 5.0f, 100000.0f, 300000.0f);
 
-    /* LLC current loop */
-    s_pi_illc = (PI_Controller_t){
-        .Kp = 0.01f, .Ki = 10.0f, .Tt = 0.01f,
-        .out_min = 100000.0f, .out_max = 300000.0f,
-        .integrator = 0.0f, .prev_error = 0.0f
-    };
+    /* LLC current loop: Tt = sqrt(0.01/10) ≈ 0.032 */
+    PI_SetGains(PI_ID_ILLC, 0.01f, 10.0f, 100000.0f, 300000.0f);
 
     /* Configure PFC HRTIM timers (does not start outputs) */
     App_Control_HRTIM_PFC_Init();
@@ -148,9 +189,13 @@ float PI_Update(PI_Controller_t *pi, float setpoint, float measurement, float dt
     /* Clamp output */
     float output_sat = output;
     if (output_sat > pi->out_max)
+    {
         output_sat = pi->out_max;
+    }
     if (output_sat < pi->out_min)
+    {
         output_sat = pi->out_min;
+    }
 
     /* Anti-windup: back-calculation */
     float aw = (output_sat - output) * pi->Tt;
@@ -409,6 +454,42 @@ void App_Control_PFC_SetDuty(float duty)
                                     HRTIM_COMPAREUNIT_1, &cmp);
 }
 
+/**
+ * @brief  Set per-phase PFC duty cycles (independent per leg)
+ * @param  da  Phase A duty [0, 0.95]
+ * @param  db  Phase B duty [0, 0.95]
+ * @param  dc  Phase C duty [0, 0.95]
+ */
+void App_Control_PFC_SetDutyABC(float da, float db, float dc)
+{
+    /* Clamp each phase independently */
+    if (da < 0.0f) { da = 0.0f; }
+    if (da > PFC_MAX_DUTY) { da = PFC_MAX_DUTY; }
+    if (db < 0.0f) { db = 0.0f; }
+    if (db > PFC_MAX_DUTY) { db = PFC_MAX_DUTY; }
+    if (dc < 0.0f) { dc = 0.0f; }
+    if (dc > PFC_MAX_DUTY) { dc = PFC_MAX_DUTY; }
+
+    HRTIM_CompareCfgTypeDef cmp = {0};
+    uint32_t cmp_a = (uint32_t)((float)PFC_HRTIM_PERIOD * da);
+    uint32_t cmp_b = (uint32_t)((float)PFC_HRTIM_PERIOD * db);
+    uint32_t cmp_c = (uint32_t)((float)PFC_HRTIM_PERIOD * dc);
+
+    if (cmp_a < 1U) { cmp_a = 1U; }
+    if (cmp_b < 1U) { cmp_b = 1U; }
+    if (cmp_c < 1U) { cmp_c = 1U; }
+
+    cmp.CompareValue = cmp_a;
+    HAL_HRTIM_WaveformCompareConfig(&hhrtim1, HRTIM_TIMERINDEX_TIMER_A,
+                                    HRTIM_COMPAREUNIT_1, &cmp);
+    cmp.CompareValue = cmp_b;
+    HAL_HRTIM_WaveformCompareConfig(&hhrtim1, HRTIM_TIMERINDEX_TIMER_B,
+                                    HRTIM_COMPAREUNIT_1, &cmp);
+    cmp.CompareValue = cmp_c;
+    HAL_HRTIM_WaveformCompareConfig(&hhrtim1, HRTIM_TIMERINDEX_TIMER_C,
+                                    HRTIM_COMPAREUNIT_1, &cmp);
+}
+
 /* ------------------------------------------------------------------ */
 /*  ISR Callbacks                                                      */
 /* ------------------------------------------------------------------ */
@@ -418,9 +499,28 @@ void App_Control_PFC_ISR(void)
     const ADC_Readings_t *adc = App_ADC_GetReadings();
     static const float dt = 1.0f / (float)PFC_ISR_FREQ_HZ;
 
-    App_PLL_Update(adc->v_grid_a, adc->v_grid_b, dt);
+    /* Compute sin/cos of PLL angle via CORDIC */
+    float theta = App_PLL_GetTheta();
+    SinCos_t sc = Transforms_CORDIC_SinCos(theta);
 
-    /* Open-loop: static duty — no control action needed (EP-04-001) */
+    /* Clarke transform on phase currents */
+    AlphaBeta_t i_ab = Transforms_Clarke(adc->i_phase_a, adc->i_phase_b);
+
+    /* Park transform to dq frame */
+    DQ_t i_dq = Transforms_Park(i_ab, sc);
+    (void)i_dq; /* TODO (EP-04-001): PI control on i_d, i_q */
+
+    /* Update PLL with pre-computed sin/cos */
+    App_PLL_UpdateEx(adc->v_grid_a, adc->v_grid_b, dt, sc);
+
+    /*
+     * TODO (EP-04-001): Inverse Park on PI outputs → SVM → SetDutyABC
+     *   DQ_t v_dq = { .d = pi_d_out, .q = pi_q_out };
+     *   AlphaBeta_t v_ab = Transforms_InversePark(v_dq, sc);
+     *   DutyABC_t duties = Transforms_SVM(v_ab.alpha, v_ab.beta,
+     *                                      adc->v_bus, PFC_MAX_DUTY);
+     *   App_Control_PFC_SetDutyABC(duties.a, duties.b, duties.c);
+     */
 }
 
 void App_Control_LLC_ISR(void)

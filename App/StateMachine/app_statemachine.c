@@ -54,10 +54,7 @@ static volatile uint8_t    s_enable_requested = 0;
 /** @brief  LED toggle period in PLL_LOCK state (ms) — fast blink */
 #define PLL_LOCK_LED_BLINK_MS  100U
 
-/** @brief  Shutdown sequence timing (ms) */
-#define SHUTDOWN_LLC_OFF_MS    0U
-#define SHUTDOWN_PFC_OFF_MS    100U
-#define SHUTDOWN_RELAY_OFF_MS  200U
+/** @brief  Shutdown failsafe timeout (ms) */
 #define SHUTDOWN_TIMEOUT_MS    3000U
 
 /* ------------------------------------------------------------------ */
@@ -173,17 +170,50 @@ static void state_pll_lock(void)
 }
 
 /**
- * @brief  SOFT_START_PFC — PFC open-loop bring-up
+ * @brief  SOFT_START_PFC — duty ramp + NTC bypass
  *
- * PFC outputs are already running at 30% duty (started in STANDBY).
- * For open-loop bring-up, immediately transition to LLC soft-start.
- * Closed-loop Id* ramp comes in a later story.
+ * PFC outputs are already running (started in STANDBY→PLL_LOCK).
+ * Ramps duty from 5% to 30% over 200 ms while monitoring Vbus.
+ * NTC bypass relay engages at 80% of target bus voltage.
+ * LED triple-blinks (150 ms period) to distinguish from PLL_LOCK.
  */
 static void state_soft_start_pfc(void)
 {
-    /* Open-loop: PFC already switching at fixed duty — skip to LLC */
-    App_Diagnostics_Log("[SM] PFC open-loop — skip to LLC");
-    State_Transition(STATE_SOFT_START_LLC);
+    uint32_t elapsed = HAL_GetTick() - s_state_entry_tick;
+
+    /* First tick after entry — begin PFC soft-start */
+    if (elapsed == 0U)
+    {
+        PFC_SoftStart_Begin();
+    }
+
+    /* LED triple-blink — 150 ms period */
+    uint32_t phase = (elapsed / 50U) % 6U;
+    if ((phase == 0U) || (phase == 2U) || (phase == 4U))
+    {
+        HAL_GPIO_WritePin(DEBUG_LED_PORT, DEBUG_LED_PIN, GPIO_PIN_SET);
+    }
+    else
+    {
+        HAL_GPIO_WritePin(DEBUG_LED_PORT, DEBUG_LED_PIN, GPIO_PIN_RESET);
+    }
+
+    /* Advance PFC soft-start */
+    if (PFC_SoftStart_Tick() != 0U)
+    {
+        App_Diagnostics_Log("[SM] PFC soft-start complete");
+        State_Transition(STATE_SOFT_START_LLC);
+        return;
+    }
+
+    /* Timeout */
+    if (elapsed >= STARTUP_TIMEOUT_MS)
+    {
+        App_Diagnostics_Log("[SM] PFC soft-start timeout");
+        App_Control_PFC_Stop();
+        Fault_Enter(FAULT_STARTUP_TIMEOUT);
+        State_Transition(STATE_FAULT);
+    }
 }
 
 /**
@@ -284,41 +314,41 @@ static void state_fault(void)
 /**
  * @brief  STATE_SHUTDOWN — controlled ramp-down sequence
  *
- * t=0:      LLC stop
- * t=100 ms: PFC stop
- * t=200 ms: open relays, transition to STANDBY
- * t=3 s:    timeout → FAULT
+ * Uses Shutdown_Begin/Tick for smooth ramp-down:
+ *   Phase 1: LLC stop (immediate)
+ *   Phase 2: PFC duty ramp 30% → 0% over 100 ms
+ *   Phase 3: Wait for I_out < 0.5 A, then open contactor
+ *   Phase 4: Open all relays (NTC, PFC, LLC)
+ *   Timeout: 3 s failsafe → FAULT
  */
 static void state_shutdown(void)
 {
     uint32_t elapsed = HAL_GetTick() - s_state_entry_tick;
 
-    /* t=0: LLC stop (immediate on entry) */
-    if (elapsed <= SHUTDOWN_LLC_OFF_MS)
+    /* First tick after entry — begin shutdown sequence */
+    if (elapsed == 0U)
     {
-        App_Control_LLC_Stop();
+        Shutdown_Begin();
     }
 
-    /* t=100 ms: PFC stop */
-    if (elapsed >= SHUTDOWN_PFC_OFF_MS)
+    /* Advance shutdown */
+    if (Shutdown_Tick() != 0U)
     {
-        App_Control_PFC_Stop();
-    }
-
-    /* t=200 ms: open relays and transition to STANDBY */
-    if (elapsed >= SHUTDOWN_RELAY_OFF_MS)
-    {
-        HAL_GPIO_WritePin(RELAY_PFC_PORT, RELAY_PFC_PIN, GPIO_PIN_RESET);
-        HAL_GPIO_WritePin(RELAY_LLC_PORT, RELAY_LLC_PIN, GPIO_PIN_RESET);
         App_Diagnostics_Log("[SM] Shutdown complete — STANDBY");
         State_Transition(STATE_STANDBY);
         return;
     }
 
-    /* t=3 s: timeout failsafe */
+    /* Timeout failsafe */
     if (elapsed >= SHUTDOWN_TIMEOUT_MS)
     {
-        App_Diagnostics_Log("[SM] Shutdown timeout");
+        /* Force all outputs and relays off */
+        App_Control_LLC_Stop();
+        App_Control_PFC_Stop();
+        HAL_GPIO_WritePin(RELAY_PFC_PORT, RELAY_PFC_PIN, GPIO_PIN_RESET);
+        HAL_GPIO_WritePin(RELAY_LLC_PORT, RELAY_LLC_PIN, GPIO_PIN_RESET);
+        HAL_GPIO_WritePin(RELAY_NTC_PORT, RELAY_NTC_PIN, GPIO_PIN_RESET);
+        App_Diagnostics_Log("[SM] Shutdown timeout — forced");
         Fault_Enter(FAULT_STARTUP_TIMEOUT);
         State_Transition(STATE_FAULT);
     }
@@ -335,6 +365,7 @@ static void state_disabled(void)
     /* Ensure relay outputs are safe */
     HAL_GPIO_WritePin(RELAY_PFC_PORT, RELAY_PFC_PIN, GPIO_PIN_RESET);
     HAL_GPIO_WritePin(RELAY_LLC_PORT, RELAY_LLC_PIN, GPIO_PIN_RESET);
+    HAL_GPIO_WritePin(RELAY_NTC_PORT, RELAY_NTC_PIN, GPIO_PIN_RESET);
 
     /* Slow LED blink — 500 ms toggle */
     uint32_t elapsed = HAL_GetTick() - s_state_entry_tick;

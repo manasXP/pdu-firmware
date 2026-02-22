@@ -94,6 +94,24 @@ extern "C" {
 #define INIT_TIMEOUT_DLL_MS    50U
 
 /* ------------------------------------------------------------------ */
+/*  PFC Soft-Start Parameters                                          */
+/* ------------------------------------------------------------------ */
+
+#define PFC_SOFTSTART_RAMP_MS  200U    /* I_d* ramp duration (ms)          */
+#define PFC_SOFTSTART_ID_MAX   40.0f   /* Rated I_d* setpoint (A)          */
+#define PFC_SOFTSTART_DUTY_INIT 0.05f  /* Initial duty on ramp start       */
+#define PFC_NTC_BYPASS_VBUS_FRAC 0.80f /* NTC bypass at 80% of target Vbus */
+#define PFC_TARGET_VBUS_V      800.0f  /* Target DC bus voltage (V)        */
+
+/* ------------------------------------------------------------------ */
+/*  Shutdown Parameters                                                */
+/* ------------------------------------------------------------------ */
+
+#define SHUTDOWN_IOUT_THRESHOLD_A 0.5f /* Open contactor below this (A)   */
+#define SHUTDOWN_DUTY_RAMP_MS     100U /* PFC duty ramp-down duration (ms) */
+#define SHUTDOWN_MAX_WAIT_MS      3000U /* Max wait for I_out to decay (ms)*/
+
+/* ------------------------------------------------------------------ */
 /*  LLC Frequency Range                                                */
 /* ------------------------------------------------------------------ */
 
@@ -149,6 +167,10 @@ extern "C" {
 #define RELAY_PFC_PIN          GPIO_PIN_0
 #define RELAY_LLC_PORT         GPIOC
 #define RELAY_LLC_PIN          GPIO_PIN_1
+
+/* NTC bypass relay — PC2 (shorts inrush NTC once bus is charged) */
+#define RELAY_NTC_PORT         GPIOC
+#define RELAY_NTC_PIN          GPIO_PIN_2
 
 /* HRTIM LLC outputs — Timer D (PB14/PB15), Timer E (PC8/PC9), Timer F (PC6/PC7) */
 #define HRTIM_LLC_D1_PORT      GPIOB

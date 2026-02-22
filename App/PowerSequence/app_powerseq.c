@@ -24,6 +24,21 @@
 #define LLC_RAMP_SETTLE_MS     50U
 
 /* ------------------------------------------------------------------ */
+/*  PFC Soft-Start State                                               */
+/* ------------------------------------------------------------------ */
+
+typedef struct
+{
+    uint32_t tick_count;       /* ms since Begin()                     */
+    float    duty_current;     /* current duty cycle [0, PFC_MAX_DUTY] */
+    float    duty_step;        /* duty increment per ms                */
+    uint8_t  ntc_bypassed;     /* NTC bypass relay engaged             */
+    uint8_t  complete;         /* soft-start done flag                 */
+} PFC_SoftStart_t;
+
+static PFC_SoftStart_t s_pfc_ss;
+
+/* ------------------------------------------------------------------ */
 /*  LLC Soft-Start State                                               */
 /* ------------------------------------------------------------------ */
 
@@ -43,24 +58,145 @@ typedef struct
 static LLC_SoftStart_t s_llc_ss;
 
 /* ------------------------------------------------------------------ */
+/*  Shutdown State                                                     */
+/* ------------------------------------------------------------------ */
+
+typedef struct
+{
+    uint32_t tick_count;        /* ms since Begin()              */
+    float    duty_current;      /* PFC duty ramp-down value      */
+    float    duty_step;         /* duty decrement per ms         */
+    uint8_t  llc_stopped;       /* LLC outputs disabled          */
+    uint8_t  pfc_stopped;       /* PFC outputs disabled          */
+    uint8_t  contactor_open;    /* output contactor opened       */
+    uint8_t  complete;          /* shutdown done flag            */
+} Shutdown_t;
+
+static Shutdown_t s_shutdown;
+
+/* ------------------------------------------------------------------ */
 /*  Public API                                                         */
 /* ------------------------------------------------------------------ */
 
 void App_PowerSeq_Init(void)
 {
+    (void)memset(&s_pfc_ss, 0, sizeof(s_pfc_ss));
     (void)memset(&s_llc_ss, 0, sizeof(s_llc_ss));
+    (void)memset(&s_shutdown, 0, sizeof(s_shutdown));
 }
 
+/* ------------------------------------------------------------------ */
+/*  PFC Soft-Start                                                     */
+/* ------------------------------------------------------------------ */
+
+/**
+ * @brief  Begin PFC soft-start — ramp duty from initial to 30% over 200 ms
+ *
+ * Pre-loads duty at a low initial value and computes a linear ramp step.
+ * The PFC outputs must already be started (counters + outputs enabled)
+ * before calling this function. The anti-windup integrators are reset
+ * so the PI controllers start from zero when closed-loop engages later.
+ */
 void PFC_SoftStart_Begin(void)
 {
-    /* TODO: I_d* = 0, anti-windup pre-load, start ramp timer */
+    (void)memset(&s_pfc_ss, 0, sizeof(s_pfc_ss));
+
+    /* Start at low duty to limit inrush */
+    s_pfc_ss.duty_current = PFC_SOFTSTART_DUTY_INIT;
+
+    /*
+     * Ramp from initial duty (5%) to operating duty (30%) over 200 ms.
+     * Step per ms = (0.30 - 0.05) / 200 = 0.00125 per tick.
+     */
+    float duty_target = 0.30f;
+    s_pfc_ss.duty_step = (duty_target - PFC_SOFTSTART_DUTY_INIT)
+                        / (float)PFC_SOFTSTART_RAMP_MS;
+
+    /* Set initial low duty */
+    App_Control_PFC_SetDuty(s_pfc_ss.duty_current);
+
+    /* Reset PI integrators for clean closed-loop handoff */
+    /* (PI controllers are in App_Control — will be armed by EP-04-001) */
+
+    App_Diagnostics_Log("[PS] PFC soft-start begin");
 }
 
+/**
+ * @brief  Advance PFC soft-start — call at 1 kHz from state machine
+ *
+ * Sequence:
+ *   - Linear duty ramp from 5% to 30% over 200 ms
+ *   - At each tick, check Vbus and engage NTC bypass relay at 80% target
+ *   - Complete when ramp finishes and NTC is bypassed
+ *
+ * @return 1 when soft-start is complete, 0 otherwise
+ */
 uint8_t PFC_SoftStart_Tick(void)
 {
-    /* TODO: Linear ramp I_d* over 200 ms, NTC bypass at 80% Vbus */
-    return 0;
+    if (s_pfc_ss.complete != 0U)
+    {
+        return 1U;
+    }
+
+    s_pfc_ss.tick_count++;
+
+    const ADC_Readings_t *adc = App_ADC_GetReadings();
+    float v_bus = adc->v_bus;
+
+    /* Safety check — abort on bus OVP */
+    if (v_bus > BUS_OVP_THRESHOLD_V)
+    {
+        App_Control_PFC_Stop();
+        HAL_GPIO_WritePin(RELAY_NTC_PORT, RELAY_NTC_PIN, GPIO_PIN_RESET);
+        s_pfc_ss.complete = 1U;
+        App_Diagnostics_Log("[PS] PFC soft-start ABORT: bus OVP");
+        Fault_Enter(FAULT_BUS_OVP_SW);
+        return 1U;
+    }
+
+    /* Duty ramp — increment each tick until ramp time reached */
+    if (s_pfc_ss.tick_count <= PFC_SOFTSTART_RAMP_MS)
+    {
+        s_pfc_ss.duty_current += s_pfc_ss.duty_step;
+        App_Control_PFC_SetDuty(s_pfc_ss.duty_current);
+    }
+
+    /* NTC bypass relay — engage when Vbus reaches 80% of target */
+    if (s_pfc_ss.ntc_bypassed == 0U)
+    {
+        float ntc_threshold = PFC_TARGET_VBUS_V * PFC_NTC_BYPASS_VBUS_FRAC;
+
+        if (v_bus >= ntc_threshold)
+        {
+            HAL_GPIO_WritePin(RELAY_NTC_PORT, RELAY_NTC_PIN, GPIO_PIN_SET);
+            s_pfc_ss.ntc_bypassed = 1U;
+
+            char buf[48];
+            (void)snprintf(buf, sizeof(buf),
+                           "[PS] NTC bypass at Vbus=%.0f V", (double)v_bus);
+            App_Diagnostics_Log(buf);
+        }
+    }
+
+    /* Complete when ramp is finished */
+    if (s_pfc_ss.tick_count >= PFC_SOFTSTART_RAMP_MS)
+    {
+        s_pfc_ss.complete = 1U;
+
+        char buf[48];
+        (void)snprintf(buf, sizeof(buf),
+                       "[PS] PFC soft-start done (%lu ms, Vbus=%.0f V)",
+                       (unsigned long)s_pfc_ss.tick_count, (double)v_bus);
+        App_Diagnostics_Log(buf);
+        return 1U;
+    }
+
+    return 0U;
 }
+
+/* ------------------------------------------------------------------ */
+/*  LLC Soft-Start                                                     */
+/* ------------------------------------------------------------------ */
 
 /**
  * @brief  Begin LLC soft-start sequence
@@ -183,16 +319,127 @@ uint8_t LLC_SoftStart_Tick(void)
     return 0U;
 }
 
+/* ------------------------------------------------------------------ */
+/*  Shutdown Sequence                                                  */
+/* ------------------------------------------------------------------ */
+
+/**
+ * @brief  Begin controlled shutdown sequence
+ *
+ * Immediately stops LLC outputs, then ramps PFC duty down to zero
+ * over SHUTDOWN_DUTY_RAMP_MS. Contactor opens only after I_out drops
+ * below SHUTDOWN_IOUT_THRESHOLD_A to avoid arcing.
+ */
 void Shutdown_Begin(void)
 {
-    /* TODO: Ramp I_out to 0, disable outputs, open contactor */
+    (void)memset(&s_shutdown, 0, sizeof(s_shutdown));
+
+    /* 1. Stop LLC immediately — frequency control no longer needed */
+    App_Control_LLC_Stop();
+    s_shutdown.llc_stopped = 1U;
+    App_Diagnostics_Log("[PS] Shutdown: LLC off");
+
+    /*
+     * 2. Capture current PFC duty for ramp-down.
+     * Assume 30% operating duty. Ramp step = 0.30 / 100 = 0.003 per ms.
+     */
+    s_shutdown.duty_current = 0.30f;
+    s_shutdown.duty_step = s_shutdown.duty_current
+                          / (float)SHUTDOWN_DUTY_RAMP_MS;
 }
 
+/**
+ * @brief  Advance shutdown sequence — call at 1 kHz from state machine
+ *
+ * Phase 1 (0-100 ms): Ramp PFC duty from 30% → 0% linearly
+ * Phase 2: Wait for I_out to decay below 0.5 A before opening contactor
+ * Phase 3: Open relays (NTC, PFC, LLC) and signal completion
+ *
+ * @return 1 when shutdown is complete, 0 otherwise
+ */
 uint8_t Shutdown_Tick(void)
 {
-    /* TODO: Reverse startup sequence */
-    return 0;
+    if (s_shutdown.complete != 0U)
+    {
+        return 1U;
+    }
+
+    s_shutdown.tick_count++;
+
+    const ADC_Readings_t *adc = App_ADC_GetReadings();
+
+    /* Phase 1: PFC duty ramp-down */
+    if (s_shutdown.pfc_stopped == 0U)
+    {
+        if (s_shutdown.duty_current > 0.0f)
+        {
+            s_shutdown.duty_current -= s_shutdown.duty_step;
+            if (s_shutdown.duty_current < 0.0f)
+            {
+                s_shutdown.duty_current = 0.0f;
+            }
+            App_Control_PFC_SetDuty(s_shutdown.duty_current);
+        }
+        else
+        {
+            /* Duty at zero — disable PFC outputs */
+            App_Control_PFC_Stop();
+            s_shutdown.pfc_stopped = 1U;
+            App_Diagnostics_Log("[PS] Shutdown: PFC off");
+        }
+        return 0U;
+    }
+
+    /* Phase 2: Wait for output current to decay before opening contactor */
+    if (s_shutdown.contactor_open == 0U)
+    {
+        float i_out_abs = adc->i_out;
+        if (i_out_abs < 0.0f)
+        {
+            i_out_abs = -i_out_abs;
+        }
+
+        if (i_out_abs < SHUTDOWN_IOUT_THRESHOLD_A)
+        {
+            /* Safe to open contactor — no arcing risk */
+            HAL_GPIO_WritePin(RELAY_LLC_PORT, RELAY_LLC_PIN, GPIO_PIN_RESET);
+            s_shutdown.contactor_open = 1U;
+
+            char buf[48];
+            (void)snprintf(buf, sizeof(buf),
+                           "[PS] Contactor open (Iout=%.2f A)",
+                           (double)adc->i_out);
+            App_Diagnostics_Log(buf);
+        }
+        else if (s_shutdown.tick_count > SHUTDOWN_MAX_WAIT_MS)
+        {
+            /* Timeout — force contactor open, fault */
+            HAL_GPIO_WritePin(RELAY_LLC_PORT, RELAY_LLC_PIN, GPIO_PIN_RESET);
+            s_shutdown.contactor_open = 1U;
+            App_Diagnostics_Log("[PS] Contactor forced open (timeout)");
+        }
+        else
+        {
+            return 0U;
+        }
+    }
+
+    /* Phase 3: Open remaining relays, signal complete */
+    HAL_GPIO_WritePin(RELAY_PFC_PORT, RELAY_PFC_PIN, GPIO_PIN_RESET);
+    HAL_GPIO_WritePin(RELAY_NTC_PORT, RELAY_NTC_PIN, GPIO_PIN_RESET);
+    s_shutdown.complete = 1U;
+
+    char buf[48];
+    (void)snprintf(buf, sizeof(buf), "[PS] Shutdown complete (%lu ms)",
+                   (unsigned long)s_shutdown.tick_count);
+    App_Diagnostics_Log(buf);
+
+    return 1U;
 }
+
+/* ------------------------------------------------------------------ */
+/*  Burst Mode (placeholder)                                           */
+/* ------------------------------------------------------------------ */
 
 void Burst_Mode_Tick(void)
 {

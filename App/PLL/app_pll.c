@@ -12,6 +12,7 @@
  */
 
 #include "app_pll.h"
+#include "app_transforms.h"
 #include "app_control.h"
 #include <math.h>
 
@@ -52,26 +53,22 @@ void App_PLL_Init(void)
 
 void App_PLL_Update(float v_a, float v_b, float dt)
 {
-    /* 1. Clarke transform (two-phase from three-phase, balanced assumption)
-     *    V_alpha = V_a
-     *    V_beta  = (V_a + 2 * V_b) / sqrt(3)
-     */
-    float v_alpha = v_a;
-    float v_beta  = (v_a + 2.0f * v_b) * INV_SQRT3;
+    /* Compute sin/cos via CORDIC and delegate to UpdateEx */
+    SinCos_t sc = Transforms_CORDIC_SinCos(s_theta_hat);
+    App_PLL_UpdateEx(v_a, v_b, dt, sc);
+}
 
-    /* 2. Park transform using estimated theta
-     *    V_d =  V_alpha * cos(theta) + V_beta * sin(theta)
-     *    V_q = -V_alpha * sin(theta) + V_beta * cos(theta)
-     */
-    float cos_theta = cosf(s_theta_hat);
-    float sin_theta = sinf(s_theta_hat);
+void App_PLL_UpdateEx(float v_a, float v_b, float dt, SinCos_t sc)
+{
+    /* 1. Clarke transform using shared module */
+    AlphaBeta_t v_ab = Transforms_Clarke(v_a, v_b);
 
-    s_vd =  v_alpha * cos_theta + v_beta * sin_theta;
-    s_vq = -v_alpha * sin_theta + v_beta * cos_theta;
+    /* 2. Park transform using pre-computed sin/cos */
+    DQ_t v_dq = Transforms_Park(v_ab, sc);
+    s_vd = v_dq.d;
+    s_vq = v_dq.q;
 
-    /* 3. PI controller on V_q — drives V_q toward zero
-     *    Output is the omega correction term
-     */
+    /* 3. PI controller on V_q — drives V_q toward zero */
     float omega_corr = PI_Update(&s_pi_pll, 0.0f, s_vq, dt);
 
     /* 4. Compute desired omega with feed-forward + PI correction */
