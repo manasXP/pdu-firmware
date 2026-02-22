@@ -22,6 +22,9 @@ extern DMA_HandleTypeDef hdma_adc5;
 /** @brief  Provided by App/StateMachine — sets 1 kHz tick flag */
 extern void App_SM_TickISR(void);
 
+/** @brief  Provided by App/Control — PFC control loop at 65 kHz */
+extern void App_Control_PFC_ISR(void);
+
 /* ------------------------------------------------------------------ */
 /*  Cortex-M4 System Exceptions                                        */
 /* ------------------------------------------------------------------ */
@@ -99,6 +102,30 @@ void TIM6_DAC_IRQHandler(void)
 #ifdef DEBUG_TICK_GPIO
     HAL_GPIO_TogglePin(DEBUG_TICK_PORT, DEBUG_TICK_PIN);
 #endif
+}
+
+/**
+ * @brief  HRTIM1 Master repetition interrupt — PFC control loop at 65 kHz
+ *
+ * Direct register access for minimum latency (ISR budget <3 us).
+ */
+void HRTIM1_Master_IRQHandler(void)
+{
+    HRTIM1->sCommonRegs.ICR = HRTIM_MICR_MREP;
+    App_Control_PFC_ISR();
+}
+
+/**
+ * @brief  HRTIM1 Timer D interrupt — LLC control loop (future EP-03-007)
+ *
+ * Skeleton for closed-loop LLC ISR. Currently unused by the open-loop
+ * frequency sweep (ADC trigger 2 fires from hardware, no ISR needed).
+ */
+void HRTIM1_TIMD_IRQHandler(void)
+{
+    /* Clear Timer D repetition interrupt flag */
+    HRTIM1->sTimerxRegs[HRTIM_TIMERINDEX_TIMER_D].TIMxICR = HRTIM_TIMICR_REPC;
+    /* Reserved for closed-loop LLC control (EP-03-007) */
 }
 
 /**

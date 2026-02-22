@@ -25,6 +25,8 @@ void SysTick_Handler(void);
 /* Peripheral interrupts */
 void TIM6_DAC_IRQHandler(void);
 void HRTIM1_FLT_IRQHandler(void);
+void HRTIM1_Master_IRQHandler(void);
+void HRTIM1_TIMD_IRQHandler(void);
 
 /* DMA interrupts (ADC regular groups) */
 void DMA1_Channel1_IRQHandler(void);

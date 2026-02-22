@@ -16,6 +16,7 @@
 #include "app_control.h"
 #include "app_powerseq.h"
 #include "app_diagnostics.h"
+#include "app_pll.h"
 
 /* ------------------------------------------------------------------ */
 /*  Peripheral Handles (file-scope)                                    */
@@ -86,6 +87,7 @@ int main(void)
     App_ADC_Init();
     App_Protection_Init();
     App_CAN_Init();
+    App_PLL_Init();
     App_Control_Init();
     App_PowerSeq_Init();
     App_Diagnostics_Init();
@@ -99,6 +101,7 @@ int main(void)
     {
         App_SM_Run();
         App_ADC_RegularProcess();
+        App_Control_LLC_Sweep();
         App_Diagnostics_Poll();
     }
 }
@@ -195,6 +198,48 @@ static void MX_GPIO_Init(void)
     GPIO_InitStruct.Pull  = GPIO_NOPULL;
     GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
     HAL_GPIO_Init(RELAY_PFC_PORT, &GPIO_InitStruct);
+
+    /* HRTIM PFC outputs — Timer A (PA8/PA9), Timer B (PA10/PA11) */
+    GPIO_InitStruct.Pin   = HRTIM_PFC_A1_PIN | HRTIM_PFC_A2_PIN
+                          | HRTIM_PFC_B1_PIN | HRTIM_PFC_B2_PIN;
+    GPIO_InitStruct.Mode  = GPIO_MODE_AF_PP;
+    GPIO_InitStruct.Pull  = GPIO_NOPULL;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+    GPIO_InitStruct.Alternate = GPIO_AF13_HRTIM1;
+    HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+    /* HRTIM PFC outputs — Timer C (PB12/PB13) + LLC Timer D (PB14/PB15) */
+    GPIO_InitStruct.Pin   = HRTIM_PFC_C1_PIN | HRTIM_PFC_C2_PIN
+                          | HRTIM_LLC_D1_PIN | HRTIM_LLC_D2_PIN;
+    GPIO_InitStruct.Mode  = GPIO_MODE_AF_PP;
+    GPIO_InitStruct.Pull  = GPIO_NOPULL;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+    GPIO_InitStruct.Alternate = GPIO_AF13_HRTIM1;
+    HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+    /* HRTIM LLC outputs — Timer E (PC8/PC9), AF3 */
+    GPIO_InitStruct.Pin   = HRTIM_LLC_E1_PIN | HRTIM_LLC_E2_PIN;
+    GPIO_InitStruct.Mode  = GPIO_MODE_AF_PP;
+    GPIO_InitStruct.Pull  = GPIO_NOPULL;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+    GPIO_InitStruct.Alternate = GPIO_AF3_HRTIM1;
+    HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+
+    /* HRTIM LLC outputs — Timer F (PC6/PC7), AF13 */
+    GPIO_InitStruct.Pin   = HRTIM_LLC_F1_PIN | HRTIM_LLC_F2_PIN;
+    GPIO_InitStruct.Mode  = GPIO_MODE_AF_PP;
+    GPIO_InitStruct.Pull  = GPIO_NOPULL;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+    GPIO_InitStruct.Alternate = GPIO_AF13_HRTIM1;
+    HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+
+    /* FDCAN1 — PB8 (RX), PB9 (TX), AF9 */
+    GPIO_InitStruct.Pin   = FDCAN1_RX_PIN | FDCAN1_TX_PIN;
+    GPIO_InitStruct.Mode  = GPIO_MODE_AF_PP;
+    GPIO_InitStruct.Pull  = GPIO_NOPULL;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+    GPIO_InitStruct.Alternate = GPIO_AF9_FDCAN1;
+    HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 }
 
 /**

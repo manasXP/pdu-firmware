@@ -94,6 +94,15 @@ extern "C" {
 #define INIT_TIMEOUT_DLL_MS    50U
 
 /* ------------------------------------------------------------------ */
+/*  LLC Frequency Range                                                */
+/* ------------------------------------------------------------------ */
+
+#define LLC_FREQ_MIN_HZ        100000U   /* 100 kHz — below resonance  */
+#define LLC_FREQ_MAX_HZ        300000U   /* 300 kHz — safe startup     */
+#define LLC_FREQ_RESONANT_HZ   150000U   /* ~150 kHz expected fr       */
+#define LLC_DEADTIME_TICKS     272U      /* 200 ns @ MUL8 (1.36 GHz)  */
+
+/* ------------------------------------------------------------------ */
 /*  NVIC Priorities                                                    */
 /* ------------------------------------------------------------------ */
 
@@ -131,17 +140,31 @@ extern "C" {
 #define HRTIM_PFC_C2_PORT      GPIOB
 #define HRTIM_PFC_C2_PIN       GPIO_PIN_13   /* HRTIM_CHC2 — Timer C output 2 */
 
-/* Relay / contactor control — placeholders */
+/* Relay / contactor control — PC0/PC1 (relocated from PC8/PC9 for LLC HRTIM) */
 #define RELAY_PFC_PORT         GPIOC
-#define RELAY_PFC_PIN          GPIO_PIN_8
+#define RELAY_PFC_PIN          GPIO_PIN_0
 #define RELAY_LLC_PORT         GPIOC
-#define RELAY_LLC_PIN          GPIO_PIN_9
+#define RELAY_LLC_PIN          GPIO_PIN_1
 
-/* FDCAN1 pins */
-#define FDCAN1_TX_PORT         GPIOA
-#define FDCAN1_TX_PIN          GPIO_PIN_12
-#define FDCAN1_RX_PORT         GPIOA
-#define FDCAN1_RX_PIN          GPIO_PIN_11
+/* HRTIM LLC outputs — Timer D (PB14/PB15), Timer E (PC8/PC9), Timer F (PC6/PC7) */
+#define HRTIM_LLC_D1_PORT      GPIOB
+#define HRTIM_LLC_D1_PIN       GPIO_PIN_14   /* HRTIM_CHD1 — Timer D output 1, AF13 */
+#define HRTIM_LLC_D2_PORT      GPIOB
+#define HRTIM_LLC_D2_PIN       GPIO_PIN_15   /* HRTIM_CHD2 — Timer D output 2, AF13 */
+#define HRTIM_LLC_E1_PORT      GPIOC
+#define HRTIM_LLC_E1_PIN       GPIO_PIN_8    /* HRTIM_CHE1 — Timer E output 1, AF3  */
+#define HRTIM_LLC_E2_PORT      GPIOC
+#define HRTIM_LLC_E2_PIN       GPIO_PIN_9    /* HRTIM_CHE2 — Timer E output 2, AF3  */
+#define HRTIM_LLC_F1_PORT      GPIOC
+#define HRTIM_LLC_F1_PIN       GPIO_PIN_6    /* HRTIM_CHF1 — Timer F output 1, AF13 */
+#define HRTIM_LLC_F2_PORT      GPIOC
+#define HRTIM_LLC_F2_PIN       GPIO_PIN_7    /* HRTIM_CHF2 — Timer F output 2, AF13 */
+
+/* FDCAN1 pins (remapped to PB8/PB9 — PA11/PA12 used by HRTIM Timer B) */
+#define FDCAN1_RX_PORT         GPIOB
+#define FDCAN1_RX_PIN          GPIO_PIN_8    /* AF9 */
+#define FDCAN1_TX_PORT         GPIOB
+#define FDCAN1_TX_PIN          GPIO_PIN_9    /* AF9 */
 
 /* USART2 pins */
 #define USART2_TX_PORT         GPIOA

@@ -24,10 +24,21 @@ void  App_Control_Init(void);
 float PI_Update(PI_Controller_t *pi, float setpoint, float measurement, float dt);
 void  PI_Reset(PI_Controller_t *pi);
 
-/* PFC control */
+/* PFC HRTIM configuration and control */
+void App_Control_HRTIM_PFC_Init(void);
+void App_Control_PFC_Start(void);
+void App_Control_PFC_Stop(void);
+void App_Control_PFC_SetDuty(float duty);
 void App_Control_PFC_ISR(void);
 
-/* LLC control */
-void App_Control_LLC_ISR(void);
+/* LLC HRTIM configuration and control */
+void    App_Control_HRTIM_LLC_Init(void);
+void    App_Control_LLC_Start(void);
+void    App_Control_LLC_Stop(void);
+void    App_Control_LLC_SetFrequency(uint32_t freq_hz);
+void    App_Control_LLC_SweepStart(void);
+void    App_Control_LLC_Sweep(void);
+uint8_t App_Control_LLC_SweepDone(void);
+void    App_Control_LLC_ISR(void);
 
 #endif /* APP_CONTROL_H */
